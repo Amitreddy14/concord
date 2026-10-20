@@ -46,7 +46,7 @@ seed: ## Load the scenario fixture dataset into the mock systems
 	$(PY) -m apps.mocks.seed --fixtures evals/golden/fixtures
 
 .PHONY: check
-check: lint types contracts test ## Everything CI runs
+check: lint types contracts yaml test ## Everything CI runs
 
 .PHONY: lint
 lint: ## Lint and format check
@@ -60,6 +60,15 @@ types: ## Static type check
 .PHONY: contracts
 contracts: ## Validate the OpenAPI contracts
 	$(PY) -m scripts.validate_contracts contracts
+
+.PHONY: yaml
+yaml: ## Parse every YAML document in the tree
+	$(PY) -m scripts.check_yaml
+
+.PHONY: hooks
+hooks: ## Point git at the repository's tracked hooks
+	git config core.hooksPath infra/githooks
+	@echo "hooks enabled: $$(git config core.hooksPath)"
 
 .PHONY: test
 test: ## Unit and integration tests
