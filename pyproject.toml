@@ -1,0 +1,38 @@
+[project]
+name = "concord"
+version = "0.1.0"
+description = "Autonomous support resolution agent for a payments merchant desk"
+requires-python = ">=3.12"
+dependencies = [
+  "pydantic>=2.9",
+  "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+mocks = ["fastapi>=0.115", "uvicorn[standard]>=0.30"]
+dev = ["ruff>=0.6", "mypy>=1.11", "pytest>=8.3", "pytest-asyncio>=0.24"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["apps/console"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "SIM", "RUF", "ANN", "PL"]
+# ANN101/102 (self, cls) are noise; the money rule below is the one that matters.
+ignore = ["ANN101", "ANN102"]
+
+[tool.ruff.lint.per-file-ignores]
+"evals/**" = ["PLR2004"]
+"scripts/**" = ["PLR0912"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+disallow_any_explicit = false
+exclude = ["apps/console"]
+
+[tool.pytest.ini_options]
+testpaths = ["packages", "apps", "evals"]
+asyncio_mode = "auto"
