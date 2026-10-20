@@ -1,8 +1,19 @@
 .DEFAULT_GOAL := help
 SHELL := /bin/bash
 
-PY := python
+# python3 rather than python: most Linux distributions ship no `python`
+# alias, and CI only appeared to work because actions/setup-python adds one.
+# Override on a system where the interpreter is named differently:
+#   make check PY=python
+PY ?= python3
 COMPOSE := docker compose -f infra/docker-compose.yml
+
+.PHONY: require-python
+require-python:
+	@command -v $(PY) >/dev/null 2>&1 || { \
+		echo "error: '$(PY)' not found on PATH."; \
+		echo "       install Python 3.12+, or override: make <target> PY=<interpreter>"; \
+		exit 1; }
 
 .PHONY: help
 help: ## Show available targets
@@ -22,7 +33,7 @@ models: ## Pull the local models named in .env
 	ollama pull $${LLM_EMBEDDING_MODEL:-nomic-embed-text}
 
 .PHONY: doctor
-doctor: ## Verify the local inference setup and measure decode throughput
+doctor: require-python ## Verify the local inference setup and measure decode throughput
 	$(PY) -m packages.shared.doctor
 
 .PHONY: up
@@ -42,7 +53,7 @@ migrate: ## Apply database migrations
 	alembic -c infra/alembic.ini upgrade head
 
 .PHONY: seed
-seed: ## Load the scenario fixture dataset into the mock systems
+seed: require-python ## Load the scenario fixture dataset into the mock systems
 	$(PY) -m apps.mocks.seed --fixtures evals/golden/fixtures
 
 .PHONY: check
@@ -58,11 +69,11 @@ types: ## Static type check
 	mypy --strict packages apps
 
 .PHONY: contracts
-contracts: ## Validate the OpenAPI contracts
+contracts: require-python ## Validate the OpenAPI contracts
 	$(PY) -m scripts.validate_contracts contracts
 
 .PHONY: yaml
-yaml: ## Parse every YAML document in the tree
+yaml: require-python ## Parse every YAML document in the tree
 	$(PY) -m scripts.check_yaml
 
 .PHONY: hooks
@@ -71,11 +82,11 @@ hooks: ## Point git at the repository's tracked hooks
 	@echo "hooks enabled: $$(git config core.hooksPath)"
 
 .PHONY: test
-test: ## Unit and integration tests
+test: require-python ## Unit and integration tests
 	pytest -q
 
 .PHONY: eval
-eval: ## Run the golden scenario suite
+eval: require-python ## Run the golden scenario suite
 	$(PY) -m evals.harness.run --suite evals/golden --report evals/reports
 
 .PHONY: clean
