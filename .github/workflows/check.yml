@@ -33,14 +33,15 @@ jobs:
       - name: Install validation dependencies
         run: python -m pip install --quiet pyyaml
 
-      # The substantive check: structure, cross-file reference integrity, the
-      # house rules, and correspondence between the fixtures and the scenario
-      # catalogue in both directions.
+      # Invoked through make rather than directly, so CI exercises the same
+      # entry points a developer uses. Calling the modules directly is how CI
+      # stayed green while `make contracts` was broken locally by an
+      # interpreter name that does not exist on a stock Linux install.
       - name: Validate contracts and golden fixtures
-        run: python -m scripts.validate_contracts contracts
+        run: make contracts
 
       - name: Parse every YAML document in the tree
-        run: python -m scripts.check_yaml
+        run: make yaml
 
   repo-hygiene:
     name: repository hygiene
