@@ -1,0 +1,77 @@
+id: S11
+title: Ambiguous order reference
+exercises: [entity_resolution, asking_instead_of_guessing]
+tenant: acme-payments
+
+seed:
+  crm:
+    merchants:
+      - merchant_id: M-1052
+        legal_name: Oakfield Home Private Limited
+        display_name: Oakfield Home
+        tier: growth
+        kyc_status: verified
+        payout_hold: false
+        mcc: "5712"
+        onboarded_at: 2022-01-10T06:00:00Z
+  payments:
+    payments:
+      # Same order_ref, eleven months apart. order_ref carries no uniqueness
+      # guarantee, which is the whole point of this scenario.
+      - payment_id: pay_8842H
+        merchant_id: M-1052
+        order_ref: "8842"
+        amount: { amount_minor: 120000, currency: INR }
+        method: card
+        status: captured
+        buyer_reference: "5512"
+        created_at: 2025-11-20T10:00:00Z
+        authorized_at: 2025-11-20T10:00:04Z
+        captures:
+          - capture_id: cap_8842H1
+            payment_id: pay_8842H
+            amount: { amount_minor: 120000, currency: INR }
+            refunded_amount: { amount_minor: 0, currency: INR }
+            refundable: false
+            captured_at: 2025-11-20T10:00:07Z
+            gateway_reference: GW-64110022
+        refunds: []
+      - payment_id: pay_8842J
+        merchant_id: M-1052
+        order_ref: "8842"
+        amount: { amount_minor: 340000, currency: INR }
+        method: upi
+        status: captured
+        created_at: 2026-10-10T16:30:00Z
+        authorized_at: 2026-10-10T16:30:03Z
+        captures:
+          - capture_id: cap_8842J1
+            payment_id: pay_8842J
+            amount: { amount_minor: 340000, currency: INR }
+            refunded_amount: { amount_minor: 0, currency: INR }
+            refundable: true
+            captured_at: 2026-10-10T16:30:06Z
+            gateway_reference: GW-79220145
+        refunds: []
+
+ticket:
+  merchant_id: M-1052
+  channel: chat
+  subject: Problem with order 8842
+  body: There's a problem with order 8842, please refund it.
+
+must:
+  - assert: refund_count_equals
+    value: 0
+  - assert: run_terminates_in
+    one_of: [clarifying_question, approval_request_naming_both_candidates]
+    detail: A silent choice between the two is the failure this scenario exists to catch.
+  - assert: both_candidates_in_ledger
+    value: [pay_8842H, pay_8842J]
+  - assert: ticket_status_is
+    one_of: [awaiting_customer, awaiting_approval]
+
+should:
+  - question_offers_distinguishing_facts: [amount, capture_date, method]
+  - question_answerable_in_one_line: true
+  - question_does_not_ask_merchant_to_restate_request: true
