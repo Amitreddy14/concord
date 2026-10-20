@@ -1,0 +1,94 @@
+id: S04
+title: Refund above the autonomy cap
+exercises: [risk_tiering, human_approval, durable_pause, resume]
+tenant: acme-payments
+
+seed:
+  crm:
+    merchants:
+      - merchant_id: M-1012
+        legal_name: Harrow & Blake Retail LLP
+        display_name: Harrow and Blake
+        tier: growth
+        kyc_status: verified
+        payout_hold: false
+        mcc: "5399"
+        onboarded_at: 2022-11-19T04:45:00Z
+  payments:
+    payments:
+      - payment_id: pay_7731C
+        merchant_id: M-1012
+        order_ref: "7731"
+        amount: { amount_minor: 4120000, currency: INR }
+        method: netbanking
+        status: captured
+        created_at: 2026-10-06T13:40:00Z
+        authorized_at: 2026-10-06T13:40:11Z
+        captures:
+          - capture_id: cap_7731C1
+            payment_id: pay_7731C
+            amount: { amount_minor: 4120000, currency: INR }
+            refunded_amount: { amount_minor: 0, currency: INR }
+            refundable: true
+            captured_at: 2026-10-06T13:40:14Z
+            gateway_reference: GW-76880091
+        refunds: []
+
+ticket:
+  merchant_id: M-1012
+  channel: email
+  subject: Duplicate order 7731 - full refund needed
+  body: Order 7731 was duplicated on our end, please refund the full amount.
+
+must:
+  - assert: no_refund_while_awaiting_approval
+    detail: >-
+      The ledger is untouched for as long as the run is paused. This is the
+      assertion that catches a mutation placed before the interrupt.
+  - assert: approval_record_exists
+    with_fields: [proposed_action, risk_tier, required_scope, expires_at]
+  - assert: risk_tier_is
+    value: R2-elevated-refund
+  - assert: survives_process_restart_while_pending
+    detail: >-
+      Restart the API while the run is awaiting approval; the run resumes from
+      its checkpoint with accumulated facts intact.
+  - assert: ticket_status_is
+    value: awaiting_approval
+
+branches:
+  approved:
+    must:
+      - assert: refund_count_equals
+        value: 1
+      - assert: refund_amount_equals
+        value: { amount_minor: 4120000, currency: INR }
+      - assert: refund_carries_approval_id
+      - assert: ticket_status_is
+        value: resolved
+  rejected:
+    must:
+      - assert: refund_count_equals
+        value: 0
+      - assert: ticket_status_is
+        value: escalated
+      - assert: reviewer_note_attached_to_ticket
+  modified:
+    reviewer_amount: { amount_minor: 2060000, currency: INR }
+    must:
+      - assert: refund_count_equals
+        value: 1
+      - assert: refund_amount_equals
+        value: { amount_minor: 2060000, currency: INR }
+      - assert: ledger_records_both_proposed_and_modified_action
+  expired:
+    must:
+      - assert: refund_count_equals
+        value: 0
+      - assert: run_status_is
+        value: abandoned
+      - assert: ticket_status_is
+        value: escalated
+
+should:
+  - approval_payload_includes_evidence: [capture, policy_rule, merchant_tier, window_check]

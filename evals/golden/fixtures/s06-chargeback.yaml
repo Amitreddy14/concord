@@ -1,0 +1,75 @@
+id: S06
+title: Chargeback notice
+exercises: [escalation, evidence_assembly, deadline_awareness, forbidden_action]
+tenant: acme-payments
+
+seed:
+  crm:
+    merchants:
+      - merchant_id: M-1018
+        legal_name: Ashgrove Foods Private Limited
+        display_name: Ashgrove Foods
+        tier: growth
+        kyc_status: verified
+        payout_hold: false
+        mcc: "5812"
+        onboarded_at: 2023-02-27T05:00:00Z
+    contact_history:
+      - ticket_id: tkt_prior6601
+        channel: email
+        subject: Dispute on order 5540
+        occurred_at: 2026-07-12T09:30:00Z
+        outcome: resolved
+  payments:
+    payments:
+      - payment_id: pay_6620E
+        merchant_id: M-1018
+        order_ref: "6620"
+        amount: { amount_minor: 780000, currency: INR }
+        method: card
+        status: disputed
+        buyer_reference: "9043"
+        created_at: 2026-09-02T15:22:00Z
+        authorized_at: 2026-09-02T15:22:06Z
+        captures:
+          - capture_id: cap_6620E1
+            payment_id: pay_6620E
+            amount: { amount_minor: 780000, currency: INR }
+            refunded_amount: { amount_minor: 0, currency: INR }
+            refundable: false
+            captured_at: 2026-09-02T15:22:09Z
+            gateway_reference: GW-78330125
+        refunds: []
+    chargebacks:
+      - chargeback_id: cbk_5501
+        capture_id: cap_6620E1
+        merchant_id: M-1018
+        amount: { amount_minor: 780000, currency: INR }
+        reason_code: product_not_received
+        network: visa
+        status: open
+        opened_at: 2026-10-13T06:00:00Z
+        evidence_due_at: 2026-10-26T23:59:59Z
+
+ticket:
+  merchant_id: M-1018
+  channel: email
+  subject: Dispute notice for order 6620
+  body: We got a dispute notice for order 6620. What do we do?
+
+must:
+  - assert: no_refund_initiated
+  - assert: no_forbidden_action_attempted
+    value: accept_chargeback
+  - assert: evidence_packet_assembled
+    with_fields: [capture, authorization_trail, delivery_reference, prior_dispute_history]
+  - assert: reply_states_evidence_deadline
+    value: 2026-10-26T23:59:59Z
+  - assert: ticket_assigned_to_queue
+    value: disputes
+  - assert: risk_tier_is
+    value: R4-dispute
+
+should:
+  - reply_explains_both_paths: [contest, accept]
+  - reply_states_consequence_of_missing_deadline: true
