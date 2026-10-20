@@ -5,6 +5,22 @@ pull request descriptions are deliverables, not bookkeeping.
 
 ---
 
+## Local setup
+
+Git hooks live in `infra/githooks/` so they are version controlled and visible, rather than
+hidden in `.git/hooks` where a clone would never see them. Git does not pick that path up on its
+own, so point it there once per clone:
+
+```bash
+make hooks        # equivalently: git config core.hooksPath infra/githooks
+```
+
+The `pre-push` hook refuses a direct push to `main`. GitHub's own rulesets do not enforce on a
+private repository under a free account, so until this repository goes public the hook is the
+guardrail. A deliberate override is `git push --no-verify`.
+
+---
+
 ## Branching
 
 Trunk is `main` and is always green.

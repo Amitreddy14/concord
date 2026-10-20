@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Phases land on main through a pull request, never a direct push (ADR 0006).
+# GitHub's own rulesets do not enforce on private repositories under a free
+# account, so this hook is the guardrail until the repository goes public.
+set -euo pipefail
+
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+  if [[ "${remote_ref}" == "refs/heads/main" ]]; then
+    echo "pre-push: refusing a direct push to main." >&2
+    echo "          Open a pull request from a phase branch instead." >&2
+    echo "          Deliberate override: git push --no-verify" >&2
+    exit 1
+  fi
+done
