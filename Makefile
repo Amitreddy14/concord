@@ -54,7 +54,7 @@ migrate: ## Apply database migrations
 
 .PHONY: seed
 seed: require-python ## Load the scenario fixture dataset into the mock systems
-	$(PY) -m apps.mocks.seed --fixtures evals/golden/fixtures
+	$(PY) -m apps.mocks.seed --scenario $${SCENARIO:-S02}
 
 .PHONY: check
 check: lint types contracts yaml money test ## Everything CI runs
