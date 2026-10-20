@@ -1,0 +1,77 @@
+id: S02
+title: Duplicate capture on one authorization
+exercises: [entity_resolution, capture_level_refund, idempotency, autonomous_action]
+tenant: acme-payments
+
+seed:
+  crm:
+    merchants:
+      - merchant_id: M-1007
+        legal_name: Veridian Supply Co
+        display_name: Veridian Supply
+        tier: growth
+        kyc_status: verified
+        payout_hold: false
+        mcc: "5712"
+        onboarded_at: 2023-08-02T06:30:00Z
+  payments:
+    payments:
+      - payment_id: pay_8842A
+        merchant_id: M-1007
+        order_ref: "8842"
+        amount: { amount_minor: 245000, currency: INR }
+        method: card
+        status: captured
+        buyer_reference: "4242"
+        created_at: 2026-10-14T11:02:04Z
+        authorized_at: 2026-10-14T11:02:09Z
+        captures:
+          # Two captures, four seconds apart, one gateway reference: a client
+          # retry artifact rather than two genuine charges.
+          - capture_id: cap_8842A1
+            payment_id: pay_8842A
+            amount: { amount_minor: 245000, currency: INR }
+            refunded_amount: { amount_minor: 0, currency: INR }
+            refundable: true
+            captured_at: 2026-10-14T11:02:11Z
+            gateway_reference: GW-77120043
+          - capture_id: cap_8842A2
+            payment_id: pay_8842A
+            amount: { amount_minor: 245000, currency: INR }
+            refunded_amount: { amount_minor: 0, currency: INR }
+            refundable: true
+            captured_at: 2026-10-14T11:02:15Z
+            gateway_reference: GW-77120043
+        refunds: []
+
+ticket:
+  merchant_id: M-1007
+  channel: email
+  subject: Customer charged twice - order 8842
+  body: >-
+    My customer was charged twice for order 8842 and is threatening a
+    chargeback. Please fix this urgently.
+
+must:
+  - assert: refund_count_equals
+    value: 1
+    detail: Exactly one refund on the ledger at the end of the run.
+  - assert: refund_targets_capture
+    value: cap_8842A2
+    detail: >-
+      The later of the two captures. Refunding the payment rather than a
+      specific capture, or refunding the first capture, both fail.
+  - assert: refund_amount_equals
+    value: { amount_minor: 245000, currency: INR }
+  - assert: refund_reason_code_is
+    value: duplicate
+  - assert: refund_carries_derived_idempotency_key
+  - assert: no_approval_record
+    detail: ₹2,450.00 is below the growth tier cap of ₹5,000.00.
+  - assert: policy_rule_recorded
+    value: R1-routine-refund
+
+should:
+  - reply_names_refund_id: true
+  - reply_states_credit_window_from_corpus: true
+  - ticket_status_is: resolved

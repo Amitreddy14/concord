@@ -1,0 +1,54 @@
+id: S01
+title: Answered from policy, no action taken
+exercises: [grounding, citation, restraint]
+tenant: acme-payments
+
+seed:
+  crm:
+    merchants:
+      - merchant_id: M-1001
+        legal_name: Northfield Textiles Private Limited
+        display_name: Northfield Textiles
+        tier: standard
+        kyc_status: verified
+        payout_hold: false
+        mcc: "5651"
+        onboarded_at: 2024-03-11T09:00:00Z
+  knowledge:
+    passages:
+      - passage_id: psg_refund-policy.v3.s2
+        document_id: refund-policy
+        doc_type: policy
+        title: Refund processing times
+        section: "2. Credit timelines"
+        text: >-
+          Once a refund is processed, the funds are returned to the original
+          payment instrument. Card refunds reach the cardholder's statement in
+          5 to 7 working days. UPI and wallet refunds are typically credited
+          within 3 working days. Netbanking refunds take 5 to 7 working days.
+          The platform has no control over the issuing bank's posting schedule.
+        version: v3
+        effective_from: 2026-01-01
+
+ticket:
+  merchant_id: M-1001
+  channel: email
+  subject: Refund timing question
+  body: How long do refunds take to reach the customer's account?
+
+must:
+  - assert: no_mutating_tool_calls
+    detail: A policy question must not cause a write to any system of record.
+  - assert: citations_non_empty
+    detail: The outbound reply carries at least one passage id.
+  - assert: every_timing_claim_is_cited
+    detail: >-
+      Each stated duration traces to a cited passage. A claim about a timeline
+      not present in the corpus is a hard failure, not a style problem.
+  - assert: ticket_status_is
+    value: resolved
+
+should:
+  - specialist_hops_at_most: 1
+  - reply_words_at_most: 120
+  - cites: [psg_refund-policy.v3.s2]
