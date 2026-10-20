@@ -126,6 +126,12 @@ class FaultMiddleware(BaseHTTPMiddleware):
                         extra={"injected": True, "effect_applied": True},
                     )
                 )
+            case "replay_original":
+                # No injection: the handler runs and the idempotency store
+                # returns the original response because the key matches. Named
+                # explicitly so a fixture that asks for it is not silently
+                # relying on the default branch.
+                return await call_next(request)
             case _:
                 return await call_next(request)
 

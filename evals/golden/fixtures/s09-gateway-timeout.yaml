@@ -9,14 +9,16 @@ fault_script:
   # Deterministic from the seed. The first attempt is accepted upstream and
   # then times out at the client — the worst case, because a naive retry
   # creates a second refund.
-  - on: "POST /refunds"
+  #
+  # The field is `endpoint`, not `on`: under YAML 1.1 a bare `on` key parses
+  # as the boolean true, so the entry would silently lose its target.
+  - endpoint: "POST /refunds"
     attempt: 1
     behaviour: accept_then_client_timeout
     timeout_ms: 8000
-  - on: "POST /refunds"
+  - endpoint: "POST /refunds"
     attempt: 2
     behaviour: replay_original
-    headers: { Idempotency-Replayed: true }
 
 seed:
   crm:

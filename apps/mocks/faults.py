@@ -61,9 +61,12 @@ class ScriptedFault:
     ``attempt`` is 1-based and counts attempts against that endpoint within a
     single run, so a fixture can say "the first POST /refunds times out after
     being accepted, the second replays the original".
+
+    The field is ``endpoint`` rather than ``on`` because a bare ``on`` key in
+    YAML 1.1 parses as the boolean true, which would silently drop the target.
     """
 
-    on: str
+    endpoint: str
     attempt: int
     behaviour: Behaviour
     timeout_ms: int | None = None
@@ -125,7 +128,7 @@ class FaultInjector:
         self.profile = FaultProfile(profile)
         self.seed = seed
         self._script: dict[tuple[str, int], ScriptedFault] = {
-            (f.on, f.attempt): f for f in (script or [])
+            (f.endpoint, f.attempt): f for f in (script or [])
         }
         self._attempts: dict[str, int] = defaultdict(int)
 
@@ -139,7 +142,7 @@ class FaultInjector:
         return self._attempts[endpoint]
 
     def load_script(self, script: list[ScriptedFault]) -> None:
-        self._script = {(f.on, f.attempt): f for f in script}
+        self._script = {(f.endpoint, f.attempt): f for f in script}
         self._attempts.clear()
 
     # -- decision --------------------------------------------------------
