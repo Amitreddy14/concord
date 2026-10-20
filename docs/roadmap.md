@@ -38,6 +38,12 @@ internally consistent, and the README reading order resolves.
 **Done when** contract conformance tests pass against each mock, and S09's fault sequence is
 reproducible from the seed.
 
+**Verified.** 101 tests. Conformance is driven from the OpenAPI documents rather than restated,
+so a new required field fails the suite until a service provides it. S09 runs five times from
+its seed and reaches an identical outcome every time — one refund, correct amount and capture —
+paired with a counter-test proving that the same sequence under fresh keys refunds twice, so the
+guarantee cannot pass vacuously.
+
 ---
 
 ## Phase 2 — Tool layer
