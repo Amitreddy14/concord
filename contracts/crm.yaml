@@ -1,0 +1,260 @@
+openapi: 3.1.0
+info:
+  title: Merchant CRM
+  version: 0.1.0
+  description: |
+    System of record for merchant identity, tier, KYC status and support contacts.
+    Read-only to Concord except for the contact-note endpoint: the agent may
+    record what it did, but may not alter a merchant's standing.
+
+    Tier and KYC status read from this service are authoritative. No value
+    asserted in a ticket may override them (ADR 0005).
+servers:
+  - url: http://localhost:8101
+    description: Local mock
+tags:
+  - name: merchants
+  - name: notes
+paths:
+  /health:
+    get:
+      operationId: crmHealth
+      summary: Liveness probe
+      tags: [merchants]
+      responses:
+        '200':
+          description: Service is up.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    const: ok
+  /merchants/{merchantId}:
+    get:
+      operationId: getMerchant
+      summary: Fetch a merchant's record
+      tags: [merchants]
+      parameters:
+        - name: merchantId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/MerchantId'
+        - $ref: './common.yaml#/components/parameters/CorrelationId'
+      responses:
+        '200':
+          description: The merchant record.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Merchant'
+        '404':
+          $ref: './common.yaml#/components/responses/NotFound'
+        '429':
+          $ref: './common.yaml#/components/responses/TooManyRequests'
+        '500':
+          $ref: './common.yaml#/components/responses/ServerError'
+  /merchants/{merchantId}/contact-history:
+    get:
+      operationId: getContactHistory
+      summary: Prior support contacts for this merchant
+      description: |
+        Used to establish whether a complaint is a repeat, which affects
+        priority and tone. Referenced by S07 and S12.
+      tags: [merchants]
+      parameters:
+        - name: merchantId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/MerchantId'
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: since
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - $ref: './common.yaml#/components/parameters/CorrelationId'
+      responses:
+        '200':
+          description: Contact history, most recent first.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: './common.yaml#/components/schemas/Page'
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/ContactRecord'
+        '404':
+          $ref: './common.yaml#/components/responses/NotFound'
+        '500':
+          $ref: './common.yaml#/components/responses/ServerError'
+  /merchants/{merchantId}/notes:
+    post:
+      operationId: addMerchantNote
+      summary: Append an immutable note to the merchant record
+      description: |
+        The only mutation Concord is permitted on this service. Notes are
+        append-only; there is no update or delete.
+      tags: [notes]
+      parameters:
+        - name: merchantId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/MerchantId'
+        - $ref: './common.yaml#/components/parameters/IdempotencyKey'
+        - $ref: './common.yaml#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body, author]
+              additionalProperties: false
+              properties:
+                body:
+                  type: string
+                  minLength: 1
+                  maxLength: 4000
+                author:
+                  type: string
+                  description: Run id or reviewer identifier.
+                tags:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '201':
+          description: Note recorded.
+          headers:
+            Idempotency-Replayed:
+              $ref: './common.yaml#/components/headers/IdempotencyReplayed'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Note'
+        '400':
+          $ref: './common.yaml#/components/responses/BadRequest'
+        '404':
+          $ref: './common.yaml#/components/responses/NotFound'
+        '409':
+          $ref: './common.yaml#/components/responses/Conflict'
+        '500':
+          $ref: './common.yaml#/components/responses/ServerError'
+components:
+  schemas:
+    MerchantId:
+      type: string
+      pattern: '^M-[0-9]{4}$'
+      examples: ['M-1007']
+    MerchantTier:
+      type: string
+      enum: [standard, growth, enterprise]
+      description: Drives SLA and refund autonomy caps via tenant configuration.
+    KycStatus:
+      type: string
+      enum: [verified, pending, under_review, rejected]
+    Merchant:
+      type: object
+      required:
+        [merchant_id, legal_name, display_name, tier, kyc_status, payout_hold, mcc, onboarded_at]
+      additionalProperties: false
+      properties:
+        merchant_id:
+          $ref: '#/components/schemas/MerchantId'
+        legal_name:
+          type: string
+        display_name:
+          type: string
+        tier:
+          $ref: '#/components/schemas/MerchantTier'
+        kyc_status:
+          $ref: '#/components/schemas/KycStatus'
+        payout_hold:
+          type: boolean
+        payout_hold_reason:
+          type: [string, 'null']
+          description: |
+            Internal reason code when payouts are held. Disclosure to the
+            merchant is governed by the tenant's disclosure level, not by this
+            field's presence (S08).
+          enum: [document_mismatch, pending_verification, risk_review, sanctions_screen, null]
+        mcc:
+          type: string
+          pattern: '^[0-9]{4}$'
+        onboarded_at:
+          type: string
+          format: date-time
+        support_contacts:
+          type: array
+          items:
+            $ref: '#/components/schemas/SupportContact'
+    SupportContact:
+      type: object
+      required: [name, email, role]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        role:
+          type: string
+          enum: [owner, finance, technical, operations]
+    ContactRecord:
+      type: object
+      required: [ticket_id, channel, subject, occurred_at, outcome]
+      additionalProperties: false
+      properties:
+        ticket_id:
+          type: string
+          pattern: '^tkt_[A-Za-z0-9]+$'
+        channel:
+          type: string
+          enum: [chat, email, portal]
+        subject:
+          type: string
+        occurred_at:
+          type: string
+          format: date-time
+        outcome:
+          type: string
+          enum: [resolved, escalated, abandoned, awaiting_customer]
+    Note:
+      type: object
+      required: [note_id, merchant_id, body, author, created_at]
+      additionalProperties: false
+      properties:
+        note_id:
+          type: string
+          pattern: '^note_[A-Za-z0-9]+$'
+        merchant_id:
+          $ref: '#/components/schemas/MerchantId'
+        body:
+          type: string
+        author:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        created_at:
+          type: string
+          format: date-time
