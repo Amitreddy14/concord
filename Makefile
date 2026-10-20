@@ -5,6 +5,11 @@ SHELL := /bin/bash
 # alias, and CI only appeared to work because actions/setup-python adds one.
 # Override on a system where the interpreter is named differently:
 #   make check PY=python
+#
+# Every Python tool is invoked as `$(PY) -m <tool>` rather than as a bare
+# command, so a globally installed pytest or ruff cannot shadow the one in
+# the active environment. A bare `pytest` is how `make test` passed against
+# a different interpreter than the rest of the suite.
 PY ?= python3
 COMPOSE := docker compose -f infra/docker-compose.yml
 
@@ -49,8 +54,8 @@ logs: ## Tail service logs
 	$(COMPOSE) logs -f
 
 .PHONY: migrate
-migrate: ## Apply database migrations
-	alembic -c infra/alembic.ini upgrade head
+migrate: require-python ## Apply database migrations
+	$(PY) -m alembic -c infra/alembic.ini upgrade head
 
 .PHONY: seed
 seed: require-python ## Load the scenario fixture dataset into the mock systems
@@ -60,13 +65,13 @@ seed: require-python ## Load the scenario fixture dataset into the mock systems
 check: lint types contracts yaml money test ## Everything CI runs
 
 .PHONY: lint
-lint: ## Lint and format check
-	ruff check .
-	ruff format --check .
+lint: require-python ## Lint and format check
+	$(PY) -m ruff check .
+	$(PY) -m ruff format --check .
 
 .PHONY: types
-types: ## Static type check
-	mypy --strict packages apps
+types: require-python ## Static type check
+	$(PY) -m mypy --strict packages apps
 
 .PHONY: contracts
 contracts: require-python ## Validate the OpenAPI contracts
@@ -87,7 +92,7 @@ money: require-python ## Enforce the no-floats-near-money rule
 
 .PHONY: test
 test: require-python ## Unit and integration tests
-	pytest -q
+	$(PY) -m pytest
 
 .PHONY: eval
 eval: require-python ## Run the golden scenario suite
