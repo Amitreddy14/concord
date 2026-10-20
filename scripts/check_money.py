@@ -32,18 +32,11 @@ SKIP_DIRS = {".git", "node_modules", ".venv", "venv", ".mypy_cache", ".ruff_cach
 # A waiver must carry a reason, so the regex requires at least one word after the colon.
 ALLOW_FLOAT = re.compile(r"#\s*allow-float:\s*\S+")
 
-# A module is money-touching if it says so by name, or if it mentions the
-# domain's amount vocabulary anywhere in its source.
-MONEY_TOKENS = (
-    "amount_minor",
-    "Money",
-    "refund",
-    "capture",
-    "settlement",
-    "gross_amount",
-    "net_amount",
-    "fees",
-)
+# Modules that define money handling by name, regardless of contents.
+MONEY_FILENAMES = ("money",)
+
+# Importing this module is the strongest signal a file handles amounts.
+MONEY_MODULE = "packages.shared.money"
 
 # Identifiers whose division is almost certainly a money bug.
 AMOUNT_NAMES = {
@@ -102,10 +95,35 @@ class MoneyVisitor(ast.NodeVisitor):
         return False
 
 
-def is_money_module(path: Path, source: str) -> bool:
-    if "money" in path.name:
+def is_money_module(path: Path, tree: ast.Module) -> bool:
+    """Whether this module actually handles amounts.
+
+    Decided from the syntax tree, not from a substring search over the source.
+    An earlier version matched the word "refund" anywhere in a file, which
+    swept in the knowledge service — whose only floats are relevance scores,
+    not money — and would have forced three dishonest waivers onto code that
+    handles no amounts at all. A rule that cries wolf gets switched off.
+
+    The signals are: the filename says money; the module imports the Money
+    type; or the module names one of the amount fields from the domain model.
+    """
+    if any(token in path.name for token in MONEY_FILENAMES):
         return True
-    return any(token in source for token in MONEY_TOKENS)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == MONEY_MODULE:
+            return True
+        if isinstance(node, ast.Import) and any(a.name == MONEY_MODULE for a in node.names):
+            return True
+        if isinstance(node, ast.Name) and node.id in AMOUNT_NAMES:
+            return True
+        if isinstance(node, ast.Attribute) and node.attr in AMOUNT_NAMES:
+            return True
+        # A dict literal key such as {"amount_minor": 1} is how money is
+        # written in a payload, and is not a Name or an Attribute.
+        if isinstance(node, ast.Constant) and node.value in AMOUNT_NAMES:
+            return True
+    return False
 
 
 def main() -> int:
@@ -121,14 +139,14 @@ def main() -> int:
         if path.name == "check_money.py":
             continue
         source = path.read_text(encoding="utf-8")
-        if not is_money_module(path, source):
-            continue
-        scanned += 1
         try:
             tree = ast.parse(source, filename=str(path))
         except SyntaxError as error:
             findings.append(f"{path.relative_to(root)}:{error.lineno}: does not parse")
             continue
+        if not is_money_module(path, tree):
+            continue
+        scanned += 1
         visitor = MoneyVisitor(path)
         visitor.visit(tree)
 
