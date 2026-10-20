@@ -35,4 +35,4 @@ exclude = ["apps/console"]
 
 [tool.pytest.ini_options]
 testpaths = ["packages", "apps", "evals"]
-asyncio_mode = "auto"
+addopts = "-q"

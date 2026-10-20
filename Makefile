@@ -57,7 +57,7 @@ seed: require-python ## Load the scenario fixture dataset into the mock systems
 	$(PY) -m apps.mocks.seed --fixtures evals/golden/fixtures
 
 .PHONY: check
-check: lint types contracts yaml test ## Everything CI runs
+check: lint types contracts yaml money test ## Everything CI runs
 
 .PHONY: lint
 lint: ## Lint and format check
@@ -80,6 +80,10 @@ yaml: require-python ## Parse every YAML document in the tree
 hooks: ## Point git at the repository's tracked hooks
 	git config core.hooksPath infra/githooks
 	@echo "hooks enabled: $$(git config core.hooksPath)"
+
+.PHONY: money
+money: require-python ## Enforce the no-floats-near-money rule
+	$(PY) -m scripts.check_money
 
 .PHONY: test
 test: require-python ## Unit and integration tests
