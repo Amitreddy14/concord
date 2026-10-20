@@ -107,13 +107,13 @@ infra/          Compose stack, migrations, local bootstrap
 
 ## Status
 
-Phase 0 of 9 — foundations. See [docs/roadmap.md](docs/roadmap.md) for the full plan and the
-definition of done for each phase.
+Phase 0 complete. Phase 1 next. See [docs/roadmap.md](docs/roadmap.md) for the full plan and
+the definition of done for each phase.
 
 | Phase | Title | State |
 | --- | --- | --- |
-| 0 | Foundations: contracts, domain model, scenarios | in progress |
-| 1 | Mock enterprise systems with fault injection | not started |
+| 0 | Foundations: contracts, domain model, scenarios | complete |
+| 1 | Mock enterprise systems with fault injection | next |
 | 2 | Tool layer | not started |
 | 3 | Vertical slice | not started |
 | 4 | Knowledge grounding | not started |
