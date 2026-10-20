@@ -1,0 +1,98 @@
+name: concord
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-concord}
+      POSTGRES_USER: ${POSTGRES_USER:-concord}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-concord}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+
+  crm:
+    build:
+      context: ..
+      dockerfile: infra/mocks.Dockerfile
+    command: ["crm", "--port", "8101"]
+    environment:
+      FAULT_PROFILE: ${FAULT_PROFILE:-off}
+      FAULT_SEED: ${FAULT_SEED:-1337}
+    ports:
+      - "8101:8101"
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+
+  payments:
+    build:
+      context: ..
+      dockerfile: infra/mocks.Dockerfile
+    command: ["payments", "--port", "8102"]
+    environment:
+      FAULT_PROFILE: ${FAULT_PROFILE:-off}
+      FAULT_SEED: ${FAULT_SEED:-1337}
+    ports:
+      - "8102:8102"
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+
+  ticketing:
+    build:
+      context: ..
+      dockerfile: infra/mocks.Dockerfile
+    command: ["ticketing", "--port", "8103"]
+    environment:
+      FAULT_PROFILE: ${FAULT_PROFILE:-off}
+      FAULT_SEED: ${FAULT_SEED:-1337}
+    ports:
+      - "8103:8103"
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+
+  knowledge:
+    build:
+      context: ..
+      dockerfile: infra/mocks.Dockerfile
+    command: ["knowledge", "--port", "8104"]
+    environment:
+      FAULT_PROFILE: ${FAULT_PROFILE:-off}
+      FAULT_SEED: ${FAULT_SEED:-1337}
+    ports:
+      - "8104:8104"
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.60
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"
+      - "4317:4317"
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+volumes:
+  pgdata:
