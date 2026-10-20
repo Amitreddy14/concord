@@ -1,0 +1,312 @@
+openapi: 3.1.0
+info:
+  title: Knowledge base
+  version: 0.1.0
+  description: |
+    System of record for the tenant's policy documents, help-centre articles
+    and incident notices.
+
+    Retrieval returns **passages with stable ids**, not documents. A citation in
+    an outbound reply refers to a passage id, and a claim whose supporting
+    passage cannot be produced fails the draft check (Phase 4). Passage ids are
+    stable across re-ingestion of an unchanged document so that fixtures and
+    stored citations do not rot.
+
+    This service answers questions about policy. It is never the authority on
+    whether an action is *permitted* — that is the policy engine's job, against
+    tenant configuration (ADR 0004). A passage describing the refund window is
+    evidence for a reply; the window value the engine enforces comes from
+    configuration.
+servers:
+  - url: http://localhost:8104
+    description: Local mock
+tags:
+  - name: search
+  - name: documents
+  - name: incidents
+paths:
+  /health:
+    get:
+      operationId: knowledgeHealth
+      summary: Liveness probe
+      tags: [search]
+      responses:
+        '200':
+          description: Service is up.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    const: ok
+  /search:
+    post:
+      operationId: searchPassages
+      summary: Hybrid retrieval over the tenant's corpus
+      # POST rather than GET because the query derives from untrusted ticket
+      # text and must not travel in a URL. It performs no mutation, so it takes
+      # no idempotency key; the extension declares that to the contract linter.
+      x-concord-read-only: true
+      description: |
+        Dense and lexical retrieval fused by reciprocal rank. The request body
+        carries the query as a discrete field rather than a path parameter
+        because a query derived from a merchant ticket is untrusted content and
+        must not be interpolated into a URL or a prompt template.
+      tags: [search]
+      parameters:
+        - $ref: './common.yaml#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query, tenant_id]
+              additionalProperties: false
+              properties:
+                query:
+                  type: string
+                  minLength: 1
+                  maxLength: 2000
+                  x-concord-untrusted: true
+                tenant_id:
+                  type: string
+                top_k:
+                  type: integer
+                  minimum: 1
+                  maximum: 20
+                  default: 6
+                doc_types:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/DocumentType'
+                min_score:
+                  type: number
+                  minimum: 0
+                  maximum: 1
+                  description: |
+                    Below this, no passage is returned. An empty result is the
+                    signal for the refusal path rather than something to work
+                    around.
+      responses:
+        '200':
+          description: Ranked passages. May legitimately be empty.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [passages, query_id]
+                additionalProperties: false
+                properties:
+                  passages:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Passage'
+                  query_id:
+                    type: string
+                    description: Recorded in the run ledger for replay.
+        '400':
+          $ref: './common.yaml#/components/responses/BadRequest'
+        '429':
+          $ref: './common.yaml#/components/responses/TooManyRequests'
+        '500':
+          $ref: './common.yaml#/components/responses/ServerError'
+  /passages/{passageId}:
+    get:
+      operationId: getPassage
+      summary: Fetch a passage by id
+      description: |
+        Used to verify a citation after the fact, including during replay, so a
+        stored reply can be re-checked against the exact text it cited.
+      tags: [documents]
+      parameters:
+        - name: passageId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/PassageId'
+        - $ref: './common.yaml#/components/parameters/CorrelationId'
+      responses:
+        '200':
+          description: The passage.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Passage'
+        '404':
+          $ref: './common.yaml#/components/responses/NotFound'
+        '500':
+          $ref: './common.yaml#/components/responses/ServerError'
+  /documents:
+    get:
+      operationId: listDocuments
+      summary: List corpus documents for a tenant
+      tags: [documents]
+      parameters:
+        - name: tenantId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: doc_type
+          in: query
+          schema:
+            $ref: '#/components/schemas/DocumentType'
+        - $ref: './common.yaml#/components/parameters/CorrelationId'
+      responses:
+        '200':
+          description: Documents in the corpus.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: './common.yaml#/components/schemas/Page'
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Document'
+        '400':
+          $ref: './common.yaml#/components/responses/BadRequest'
+        '500':
+          $ref: './common.yaml#/components/responses/ServerError'
+  /incidents/active:
+    get:
+      operationId: getActiveIncidents
+      summary: Currently active platform incidents
+      description: |
+        Separate from search because an incident is a time-bounded fact rather
+        than a document. S07 may cite one only if it is returned here: an
+        incident that has closed must not be offered as an explanation.
+      tags: [incidents]
+      parameters:
+        - name: tenantId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: affects
+          in: query
+          description: Filter to incidents affecting a subsystem.
+          schema:
+            type: string
+            enum: [payments, settlements, payouts, dashboard, webhooks]
+        - $ref: './common.yaml#/components/parameters/CorrelationId'
+      responses:
+        '200':
+          description: Active incidents, newest first. May be empty.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [incidents]
+                additionalProperties: false
+                properties:
+                  incidents:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Incident'
+        '400':
+          $ref: './common.yaml#/components/responses/BadRequest'
+        '500':
+          $ref: './common.yaml#/components/responses/ServerError'
+components:
+  schemas:
+    PassageId:
+      type: string
+      pattern: '^psg_[A-Za-z0-9_.-]+$'
+      description: |
+        Stable across re-ingestion of an unchanged document, so stored
+        citations and eval fixtures survive a reindex.
+      examples: ['psg_refund-policy.v3.s2']
+    DocumentType:
+      type: string
+      enum: [policy, help_centre, runbook, incident_notice, contract_terms]
+    Passage:
+      type: object
+      required: [passage_id, document_id, doc_type, title, text, score]
+      additionalProperties: false
+      properties:
+        passage_id:
+          $ref: '#/components/schemas/PassageId'
+        document_id:
+          type: string
+        doc_type:
+          $ref: '#/components/schemas/DocumentType'
+        title:
+          type: string
+        section:
+          type: [string, 'null']
+        text:
+          type: string
+        score:
+          type: number
+          minimum: 0
+          maximum: 1
+        effective_from:
+          type: [string, 'null']
+          format: date
+          description: |
+            A passage that is not yet effective, or has been superseded, must
+            not be cited as current policy.
+        effective_to:
+          type: [string, 'null']
+          format: date
+        version:
+          type: string
+    Document:
+      type: object
+      required: [document_id, doc_type, title, version, updated_at, passage_count]
+      additionalProperties: false
+      properties:
+        document_id:
+          type: string
+        doc_type:
+          $ref: '#/components/schemas/DocumentType'
+        title:
+          type: string
+        version:
+          type: string
+        updated_at:
+          type: string
+          format: date-time
+        passage_count:
+          type: integer
+          minimum: 0
+    Incident:
+      type: object
+      required: [incident_id, title, affects, status, started_at]
+      additionalProperties: false
+      properties:
+        incident_id:
+          type: string
+          pattern: '^inc_[A-Za-z0-9]+$'
+        title:
+          type: string
+        affects:
+          type: array
+          items:
+            type: string
+            enum: [payments, settlements, payouts, dashboard, webhooks]
+        status:
+          type: string
+          enum: [investigating, identified, monitoring, resolved]
+        summary:
+          type: string
+          description: Customer-safe wording. Suitable for quoting to a merchant.
+        started_at:
+          type: string
+          format: date-time
+        resolved_at:
+          type: [string, 'null']
+          format: date-time
+        expected_resolution_at:
+          type: [string, 'null']
+          format: date-time
+          description: |
+            Quotable to a merchant only when present. Absent means no date has
+            been committed, and the agent must not invent one (S07).

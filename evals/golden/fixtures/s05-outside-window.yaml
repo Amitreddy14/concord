@@ -1,0 +1,78 @@
+id: S05
+title: Refund requested outside the policy window
+exercises: [deterministic_refusal, rule_citation, no_improvisation]
+tenant: acme-payments
+
+seed:
+  crm:
+    merchants:
+      - merchant_id: M-1003
+        legal_name: Calder Instruments Pvt Ltd
+        display_name: Calder Instruments
+        tier: standard
+        kyc_status: verified
+        payout_hold: false
+        mcc: "5065"
+        onboarded_at: 2021-06-04T10:20:00Z
+  payments:
+    payments:
+      - payment_id: pay_4410D
+        merchant_id: M-1003
+        order_ref: "4410"
+        amount: { amount_minor: 115000, currency: INR }
+        method: card
+        status: captured
+        buyer_reference: "1881"
+        created_at: 2026-03-19T07:05:00Z
+        authorized_at: 2026-03-19T07:05:04Z
+        captures:
+          - capture_id: cap_4410D1
+            payment_id: pay_4410D
+            amount: { amount_minor: 115000, currency: INR }
+            refunded_amount: { amount_minor: 0, currency: INR }
+            refundable: true
+            # 214 days before the fixture's evaluation date; window is 180.
+            captured_at: 2026-03-19T07:05:07Z
+            gateway_reference: GW-71220876
+        refunds: []
+  knowledge:
+    passages:
+      - passage_id: psg_refund-policy.v3.s1
+        document_id: refund-policy
+        doc_type: policy
+        title: Refund eligibility
+        section: "1. Eligibility window"
+        text: >-
+          A refund may be initiated within 180 days of the original capture.
+          Beyond that period the transaction can no longer be reversed through
+          the platform, and the merchant must settle with the buyer directly or
+          raise a case with their account manager.
+        version: v3
+        effective_from: 2026-01-01
+
+ticket:
+  merchant_id: M-1003
+  channel: email
+  subject: Refund request for order 4410
+  body: Please refund order 4410, the customer says it never arrived.
+
+evaluation_date: 2026-10-19T00:00:00Z
+
+must:
+  - assert: no_refund_tool_call_attempted
+    detail: >-
+      The policy engine refuses before the action node runs. A 422 from the
+      payments service means the refusal happened in the wrong layer.
+  - assert: policy_decision_step_recorded
+    with_fields: [rule_id, evaluated_inputs]
+  - assert: refund_count_equals
+    value: 0
+  - assert: reply_cites_window_rule
+    value: psg_refund-policy.v3.s1
+  - assert: ticket_status_is
+    value: escalated
+    detail: Not silently resolved; a refused request still needs a human owner.
+
+should:
+  - reply_offers_legitimate_alternative: true
+  - reply_states_days_elapsed: true

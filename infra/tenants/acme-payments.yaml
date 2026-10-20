@@ -1,0 +1,118 @@
+# Tenant configuration for the reference deployment.
+#
+# Everything the policy engine needs to decide what the agent may do lives in
+# this file. Adding a second customer means adding a second file (ADR 0006,
+# principle 5); no tenant-specific branch may exist in packages/.
+tenant_id: acme-payments
+display_name: Acme Payments
+locale: en-IN
+timezone: Asia/Kolkata
+default_currency: INR
+
+refund_policy:
+  # Days after capture during which a refund may be initiated at all. S05 sits
+  # outside this window deliberately.
+  window_days: 180
+  # Per-run autonomy ceiling by merchant tier, in minor units. A proposed
+  # refund above the ceiling requires human approval, never a silent decline.
+  autonomy_cap_minor:
+    standard: 200000      # ₹2,000.00
+    growth: 500000        # ₹5,000.00
+    enterprise: 2500000   # ₹25,000.00
+  # Reason codes the agent may assign without a human. `fraud` is excluded:
+  # labelling a transaction fraudulent has consequences beyond the refund.
+  autonomous_reason_codes: [duplicate, buyer_request, goods_not_delivered]
+  # Refunding more than one capture in a single run always needs a human, even
+  # when each leg is individually under the cap.
+  multi_capture_requires_approval: true
+
+risk_tiers:
+  # Evaluated in order; the first match wins. Every decision records the id.
+  - id: R0-informational
+    when: { mutating: false }
+    approval: none
+  - id: R1-routine-refund
+    when: { action: create_refund, within_autonomy_cap: true, reason_in_autonomous_set: true }
+    approval: none
+  - id: R2-elevated-refund
+    when: { action: create_refund, within_autonomy_cap: false }
+    approval: reviewer
+  - id: R3-compliance
+    when: { touches: [kyc, payout_hold, sanctions] }
+    approval: forbidden        # no human in this console may authorise it either
+  - id: R4-dispute
+    when: { touches: [chargeback] }
+    approval: specialist_queue
+
+forbidden_actions:
+  # Actions no risk tier can unlock. These are not "high risk", they are out of
+  # scope for this system entirely (S08).
+  - lift_payout_hold
+  - change_kyc_status
+  - alter_settlement_schedule
+  - accept_chargeback
+  - modify_merchant_tier
+
+approvals:
+  reviewer_queue: general
+  expires_after_hours: 48
+  # LangGraph does not expire frozen threads, so the sweep is ours (ADR 0001).
+  on_expiry: abandon_and_escalate
+  require_reviewer_note_on: [rejected, modified]
+
+disclosure:
+  # How much internal detail may be quoted to a merchant. Deliberately coarse:
+  # S08 must not leak a review reason code.
+  payout_hold_reason: category_only
+  kyc_review_detail: none
+  incident_detail: customer_safe_summary_only
+
+grounding:
+  require_citations: true
+  min_passage_score: 0.45
+  # A claim with no supporting passage is a refusal, not a best effort.
+  refuse_when_unsupported: true
+  corpus:
+    - doc_type: policy
+      source: infra/corpus/acme/policy
+    - doc_type: help_centre
+      source: infra/corpus/acme/help
+    - doc_type: incident_notice
+      source: infra/corpus/acme/incidents
+
+sla:
+  first_response_minutes:
+    standard: 480
+    growth: 240
+    enterprise: 60
+  # Priority is derived from tier and intent, never from merchant-asserted
+  # urgency (see the ticketing contract).
+  escalate_on_repeat_contacts: 3
+
+tool_scopes:
+  # The complete set of scopes this tenant enables. Nothing derived from a
+  # ticket may widen it (ADR 0005, rule 4).
+  - crm:merchant:read
+  - crm:note:write
+  - payments:payment:read
+  - payments:capture:read
+  - payments:refund:read
+  - payments:refund:write
+  - payments:settlement:read
+  - payments:chargeback:read
+  - ticketing:ticket:read
+  - ticketing:ticket:write
+  - ticketing:message:write
+  - ticketing:assign:write
+  - knowledge:search
+
+reply_style:
+  tone: direct_and_plain
+  max_words: 180
+  sign_off: "Acme Payments Support"
+  # Commitments the agent may never author, however the ticket is phrased (S12).
+  prohibited_commitments:
+    - specific_callback_time
+    - goodwill_credit
+    - fee_waiver
+    - delivery_date_for_unresolved_incident

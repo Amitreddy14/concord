@@ -1,0 +1,146 @@
+# Shared components referenced by every system-of-record contract.
+# Kept in one file so the error model, money representation and idempotency
+# semantics cannot drift between services.
+openapi: 3.1.0
+info:
+  title: Concord shared components
+  version: 0.1.0
+  description: |
+    Not a servable API. This document exists to be referenced by the four
+    system-of-record contracts.
+paths: {}
+components:
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: |
+        Caller-supplied key making a mutation safe to retry. Derived in Concord
+        from the run id, node name, tool name and canonical arguments, so a
+        replayed graph step produces the same key. A repeated key returns the
+        original response with `Idempotency-Replayed: true` and performs no
+        second effect.
+      schema:
+        type: string
+        minLength: 16
+        maxLength: 128
+    CorrelationId:
+      name: X-Correlation-Id
+      in: header
+      required: false
+      description: Propagated from the agent run for cross-service tracing.
+      schema:
+        type: string
+        format: uuid
+  headers:
+    IdempotencyReplayed:
+      description: Present and true when this response was replayed from the idempotency store.
+      schema:
+        type: boolean
+    RetryAfter:
+      description: Seconds to wait before retrying.
+      schema:
+        type: integer
+        minimum: 0
+  schemas:
+    Money:
+      type: object
+      description: |
+        An amount in integer minor units with its currency. Never a float, and
+        never an amount without a currency.
+      required: [amount_minor, currency]
+      additionalProperties: false
+      properties:
+        amount_minor:
+          type: integer
+          description: Minor units, for example paise for INR.
+          minimum: 0
+        currency:
+          type: string
+          description: ISO 4217 alphabetic code.
+          pattern: '^[A-Z]{3}$'
+      examples:
+        - amount_minor: 4120000
+          currency: INR
+    Problem:
+      type: object
+      description: RFC 9457 problem detail. The only error shape any service returns.
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+          format: uri-reference
+          description: Stable identifier for the problem class.
+        title:
+          type: string
+        status:
+          type: integer
+          minimum: 400
+          maximum: 599
+        detail:
+          type: string
+        instance:
+          type: string
+          format: uri-reference
+        code:
+          type: string
+          description: Machine-readable code the tool layer maps to its error taxonomy.
+        retryable:
+          type: boolean
+          description: |
+            Whether the caller may retry the identical request. Advisory; the
+            tool layer's taxonomy is authoritative.
+    Page:
+      type: object
+      required: [items, has_more]
+      properties:
+        items:
+          type: array
+          items: {}
+        has_more:
+          type: boolean
+        next_cursor:
+          type: [string, 'null']
+  responses:
+    BadRequest:
+      description: Malformed request.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    NotFound:
+      description: No such resource, or not visible to this merchant scope.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Conflict:
+      description: |
+        The request conflicts with current state, or an idempotency key was
+        reused with different arguments.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    UnprocessableEntity:
+      description: Well-formed but not permissible against current state.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    TooManyRequests:
+      description: Rate limited.
+      headers:
+        Retry-After:
+          $ref: '#/components/headers/RetryAfter'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    ServerError:
+      description: Upstream failure. Retryable with backoff.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'

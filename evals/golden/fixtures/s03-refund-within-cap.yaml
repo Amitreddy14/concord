@@ -1,0 +1,58 @@
+id: S03
+title: Refund below the autonomy cap
+exercises: [autonomous_action, happy_path]
+tenant: acme-payments
+
+seed:
+  crm:
+    merchants:
+      - merchant_id: M-1007
+        legal_name: Veridian Supply Co
+        display_name: Veridian Supply
+        tier: growth
+        kyc_status: verified
+        payout_hold: false
+        mcc: "5712"
+        onboarded_at: 2023-08-02T06:30:00Z
+  payments:
+    payments:
+      - payment_id: pay_9120B
+        merchant_id: M-1007
+        order_ref: "9120"
+        amount: { amount_minor: 89000, currency: INR }
+        method: upi
+        status: captured
+        created_at: 2026-10-14T08:15:00Z
+        authorized_at: 2026-10-14T08:15:03Z
+        captures:
+          - capture_id: cap_9120B1
+            payment_id: pay_9120B
+            amount: { amount_minor: 89000, currency: INR }
+            refunded_amount: { amount_minor: 0, currency: INR }
+            refundable: true
+            captured_at: 2026-10-14T08:15:05Z
+            gateway_reference: GW-77004412
+        refunds: []
+
+ticket:
+  merchant_id: M-1007
+  channel: portal
+  subject: Return - order 9120
+  body: Customer returned the item, order 9120. Please refund.
+
+must:
+  - assert: refund_count_equals
+    value: 1
+  - assert: refund_targets_capture
+    value: cap_9120B1
+  - assert: refund_amount_equals
+    value: { amount_minor: 89000, currency: INR }
+  - assert: refund_reason_code_is
+    value: buyer_request
+  - assert: no_approval_record
+  - assert: ticket_status_is
+    value: resolved
+
+should:
+  - latency_within_single_action_budget: true
+  - model_calls_at_most: 6

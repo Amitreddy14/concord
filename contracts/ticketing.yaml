@@ -1,0 +1,377 @@
+openapi: 3.1.0
+info:
+  title: Ticketing
+  version: 0.1.0
+  description: |
+    System of record for support tickets and their message threads.
+
+    `subject`, `body` and inbound message bodies are **untrusted content**
+    (ADR 0005). The contract marks them as such with `x-concord-untrusted` so
+    the generated clients can wrap them in a type the prompt assembler accepts
+    only in a data position.
+
+    `priority` is server-derived from merchant tier and classified intent. It is
+    deliberately not writable: a merchant asserting urgency in a ticket body
+    must not be able to raise their own priority.
+servers:
+  - url: http://localhost:8103
+    description: Local mock
+tags:
+  - name: tickets
+  - name: messages
+  - name: assignment
+paths:
+  /health:
+    get:
+      operationId: ticketingHealth
+      summary: Liveness probe
+      tags: [tickets]
+      responses:
+        '200':
+          description: Service is up.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    const: ok
+  /tickets:
+    post:
+      operationId: createTicket
+      summary: Open a ticket
+      description: Used by the intake API when a message arrives on any channel.
+      tags: [tickets]
+      parameters:
+        - $ref: './common.yaml#/components/parameters/IdempotencyKey'
+        - $ref: './common.yaml#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [merchant_id, channel, subject, body]
+              additionalProperties: false
+              properties:
+                merchant_id:
+                  $ref: './crm.yaml#/components/schemas/MerchantId'
+                channel:
+                  $ref: '#/components/schemas/Channel'
+                subject:
+                  type: string
+                  maxLength: 500
+                  x-concord-untrusted: true
+                body:
+                  type: string
+                  maxLength: 20000
+                  x-concord-untrusted: true
+                external_ref:
+                  type: [string, 'null']
+                  description: Message id from the originating channel.
+      responses:
+        '201':
+          description: Ticket opened.
+          headers:
+            Idempotency-Replayed:
+              $ref: './common.yaml#/components/headers/IdempotencyReplayed'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ticket'
+        '400':
+          $ref: './common.yaml#/components/responses/BadRequest'
+        '409':
+          $ref: './common.yaml#/components/responses/Conflict'
+        '500':
+          $ref: './common.yaml#/components/responses/ServerError'
+  /tickets/{ticketId}:
+    get:
+      operationId: getTicket
+      summary: Fetch a ticket with its message thread
+      tags: [tickets]
+      parameters:
+        - name: ticketId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/TicketId'
+        - $ref: './common.yaml#/components/parameters/CorrelationId'
+      responses:
+        '200':
+          description: The ticket.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ticket'
+        '404':
+          $ref: './common.yaml#/components/responses/NotFound'
+        '500':
+          $ref: './common.yaml#/components/responses/ServerError'
+  /tickets/{ticketId}/status:
+    patch:
+      operationId: setTicketStatus
+      summary: Transition a ticket
+      description: |
+        Illegal transitions are rejected with 422 rather than silently
+        accepted, so a buggy graph edge surfaces as an error instead of a
+        corrupt ticket state.
+      tags: [tickets]
+      parameters:
+        - name: ticketId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/TicketId'
+        - $ref: './common.yaml#/components/parameters/IdempotencyKey'
+        - $ref: './common.yaml#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status, reason]
+              additionalProperties: false
+              properties:
+                status:
+                  $ref: '#/components/schemas/TicketStatus'
+                reason:
+                  type: string
+                  maxLength: 1000
+                  description: Recorded on the ticket's audit trail.
+                run_id:
+                  type: [string, 'null']
+      responses:
+        '200':
+          description: Transitioned.
+          headers:
+            Idempotency-Replayed:
+              $ref: './common.yaml#/components/headers/IdempotencyReplayed'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ticket'
+        '404':
+          $ref: './common.yaml#/components/responses/NotFound'
+        '422':
+          description: Illegal transition from the ticket's current status.
+          content:
+            application/problem+json:
+              schema:
+                $ref: './common.yaml#/components/schemas/Problem'
+        '500':
+          $ref: './common.yaml#/components/responses/ServerError'
+  /tickets/{ticketId}/messages:
+    post:
+      operationId: postMessage
+      summary: Append a message to the thread
+      description: |
+        An outbound message authored by the agent or a reviewer. Outbound
+        bodies are trusted content; `citations` must be present whenever the
+        tenant requires grounded replies, and the service rejects an outbound
+        agent message with an empty citation list when the tenant config
+        demands citations.
+      tags: [messages]
+      parameters:
+        - name: ticketId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/TicketId'
+        - $ref: './common.yaml#/components/parameters/IdempotencyKey'
+        - $ref: './common.yaml#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [direction, author, body]
+              additionalProperties: false
+              properties:
+                direction:
+                  type: string
+                  enum: [outbound, internal_note]
+                author:
+                  type: string
+                  description: Run id or reviewer identifier.
+                body:
+                  type: string
+                  minLength: 1
+                  maxLength: 20000
+                citations:
+                  type: array
+                  items:
+                    type: string
+                    description: Knowledge passage id.
+      responses:
+        '201':
+          description: Message appended.
+          headers:
+            Idempotency-Replayed:
+              $ref: './common.yaml#/components/headers/IdempotencyReplayed'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '400':
+          $ref: './common.yaml#/components/responses/BadRequest'
+        '404':
+          $ref: './common.yaml#/components/responses/NotFound'
+        '422':
+          description: Citations required by tenant configuration but absent.
+          content:
+            application/problem+json:
+              schema:
+                $ref: './common.yaml#/components/schemas/Problem'
+        '500':
+          $ref: './common.yaml#/components/responses/ServerError'
+  /tickets/{ticketId}/assign:
+    post:
+      operationId: assignTicket
+      summary: Route a ticket to a human queue
+      description: The escalation path. Used by S05, S06, S07, S08 and S12.
+      tags: [assignment]
+      parameters:
+        - name: ticketId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/TicketId'
+        - $ref: './common.yaml#/components/parameters/IdempotencyKey'
+        - $ref: './common.yaml#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [queue, reason]
+              additionalProperties: false
+              properties:
+                queue:
+                  $ref: '#/components/schemas/Queue'
+                reason:
+                  type: string
+                  maxLength: 1000
+                context:
+                  type: object
+                  description: |
+                    Structured evidence handed to the human — the assembled
+                    packet in S06, the considered candidates in S11.
+                  additionalProperties: true
+      responses:
+        '200':
+          description: Assigned.
+          headers:
+            Idempotency-Replayed:
+              $ref: './common.yaml#/components/headers/IdempotencyReplayed'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ticket'
+        '404':
+          $ref: './common.yaml#/components/responses/NotFound'
+        '500':
+          $ref: './common.yaml#/components/responses/ServerError'
+components:
+  schemas:
+    TicketId:
+      type: string
+      pattern: '^tkt_[A-Za-z0-9]+$'
+    Channel:
+      type: string
+      enum: [chat, email, portal]
+    TicketStatus:
+      type: string
+      enum: [open, awaiting_customer, awaiting_approval, resolved, escalated]
+    Priority:
+      type: string
+      enum: [low, normal, high, urgent]
+      description: |
+        Server-derived from merchant tier and classified intent. Not writable
+        by any caller, and never derived from merchant-asserted urgency.
+    Queue:
+      type: string
+      enum: [general, disputes, compliance, settlements, technical]
+    Ticket:
+      type: object
+      required:
+        [ticket_id, merchant_id, channel, subject, body, status, priority, created_at, messages]
+      additionalProperties: false
+      properties:
+        ticket_id:
+          $ref: '#/components/schemas/TicketId'
+        merchant_id:
+          $ref: './crm.yaml#/components/schemas/MerchantId'
+        channel:
+          $ref: '#/components/schemas/Channel'
+        subject:
+          type: string
+          x-concord-untrusted: true
+        body:
+          type: string
+          x-concord-untrusted: true
+        status:
+          $ref: '#/components/schemas/TicketStatus'
+        priority:
+          $ref: '#/components/schemas/Priority'
+        queue:
+          type: [string, 'null']
+        assignee:
+          type: [string, 'null']
+        sla_due_at:
+          type: [string, 'null']
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        resolved_at:
+          type: [string, 'null']
+          format: date-time
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/Message'
+        flags:
+          type: array
+          description: |
+            Non-blocking annotations for human attention, for example a
+            suspected injection attempt (S10).
+          items:
+            type: string
+            enum:
+              - suspected_injection
+              - repeat_contact
+              - sla_breached
+              - compliance_sensitive
+    Message:
+      type: object
+      required: [message_id, ticket_id, direction, author, body, created_at]
+      additionalProperties: false
+      properties:
+        message_id:
+          type: string
+          pattern: '^msg_[A-Za-z0-9]+$'
+        ticket_id:
+          $ref: '#/components/schemas/TicketId'
+        direction:
+          type: string
+          enum: [inbound, outbound, internal_note]
+        author:
+          type: string
+        body:
+          type: string
+          description: |
+            Untrusted when `direction` is `inbound`; trusted when authored by
+            the agent or a reviewer.
+        citations:
+          type: array
+          items:
+            type: string
+        created_at:
+          type: string
+          format: date-time

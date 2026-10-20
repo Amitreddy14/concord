@@ -1,0 +1,536 @@
+openapi: 3.1.0
+info:
+  title: Payments ledger
+  version: 0.1.0
+  description: |
+    System of record for payments, captures, refunds, settlements and
+    chargebacks.
+
+    Two modelling decisions carry most of the weight here. First, a refund is
+    created against a **capture**, never against a payment: a payment with two
+    captures has no unambiguous "the amount to refund", and that ambiguity is
+    where double refunds come from. Second, `order_ref` is the merchant's own
+    identifier and is **not unique** — resolution is always scoped to a
+    merchant and may legitimately return several candidates (S11).
+servers:
+  - url: http://localhost:8102
+    description: Local mock
+tags:
+  - name: payments
+  - name: refunds
+  - name: settlements
+  - name: chargebacks
+paths:
+  /health:
+    get:
+      operationId: paymentsHealth
+      summary: Liveness probe
+      tags: [payments]
+      responses:
+        '200':
+          description: Service is up.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    const: ok
+  /payments:
+    get:
+      operationId: searchPayments
+      summary: Search payments within one merchant's scope
+      description: |
+        `merchantId` is mandatory: there is no cross-merchant search. A query by
+        `order_ref` may return more than one payment, and the caller must handle
+        that rather than taking the first result (S11).
+      tags: [payments]
+      parameters:
+        - name: merchantId
+          in: query
+          required: true
+          schema:
+            $ref: './crm.yaml#/components/schemas/MerchantId'
+        - name: order_ref
+          in: query
+          description: The merchant's own order identifier. Not unique.
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/PaymentStatus'
+        - name: created_after
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 10
+        - $ref: './common.yaml#/components/parameters/CorrelationId'
+      responses:
+        '200':
+          description: Matching payments, most recent first.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: './common.yaml#/components/schemas/Page'
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Payment'
+        '400':
+          $ref: './common.yaml#/components/responses/BadRequest'
+        '429':
+          $ref: './common.yaml#/components/responses/TooManyRequests'
+        '500':
+          $ref: './common.yaml#/components/responses/ServerError'
+  /payments/{paymentId}:
+    get:
+      operationId: getPayment
+      summary: Fetch a payment with its captures and refunds
+      tags: [payments]
+      parameters:
+        - name: paymentId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/PaymentId'
+        - $ref: './common.yaml#/components/parameters/CorrelationId'
+      responses:
+        '200':
+          description: The payment.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Payment'
+        '404':
+          $ref: './common.yaml#/components/responses/NotFound'
+        '500':
+          $ref: './common.yaml#/components/responses/ServerError'
+  /captures/{captureId}:
+    get:
+      operationId: getCapture
+      summary: Fetch a single capture
+      description: |
+        `refundable` and `refunded_amount` are computed by the service and are
+        the authoritative inputs to a refund decision. Callers must not derive
+        the refundable remainder themselves.
+      tags: [payments]
+      parameters:
+        - name: captureId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/CaptureId'
+        - $ref: './common.yaml#/components/parameters/CorrelationId'
+      responses:
+        '200':
+          description: The capture.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Capture'
+        '404':
+          $ref: './common.yaml#/components/responses/NotFound'
+        '500':
+          $ref: './common.yaml#/components/responses/ServerError'
+  /refunds:
+    post:
+      operationId: createRefund
+      summary: Create a refund against a capture
+      description: |
+        The only money-moving operation Concord can perform.
+
+        Idempotent on `Idempotency-Key`. A repeat of the same key with the same
+        arguments returns the original refund and sets
+        `Idempotency-Replayed: true`, performing no second refund — this is what
+        makes S09 safe when the first attempt times out after being accepted
+        upstream. The same key with different arguments is a 409.
+      tags: [refunds]
+      parameters:
+        - $ref: './common.yaml#/components/parameters/IdempotencyKey'
+        - $ref: './common.yaml#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefundRequest'
+      responses:
+        '201':
+          description: Refund created.
+          headers:
+            Idempotency-Replayed:
+              $ref: './common.yaml#/components/headers/IdempotencyReplayed'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Refund'
+        '400':
+          $ref: './common.yaml#/components/responses/BadRequest'
+        '404':
+          $ref: './common.yaml#/components/responses/NotFound'
+        '409':
+          $ref: './common.yaml#/components/responses/Conflict'
+        '422':
+          description: |
+            Not permissible against current state: the capture is not in a
+            refundable status, or the amount exceeds the unrefunded remainder.
+          content:
+            application/problem+json:
+              schema:
+                $ref: './common.yaml#/components/schemas/Problem'
+        '429':
+          $ref: './common.yaml#/components/responses/TooManyRequests'
+        '500':
+          $ref: './common.yaml#/components/responses/ServerError'
+  /refunds/{refundId}:
+    get:
+      operationId: getRefund
+      summary: Fetch a refund
+      description: |
+        Used by the reconciliation pass in Phase 7 to determine whether an
+        action completed upstream after a local failure.
+      tags: [refunds]
+      parameters:
+        - name: refundId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/RefundId'
+        - $ref: './common.yaml#/components/parameters/CorrelationId'
+      responses:
+        '200':
+          description: The refund.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Refund'
+        '404':
+          $ref: './common.yaml#/components/responses/NotFound'
+        '500':
+          $ref: './common.yaml#/components/responses/ServerError'
+  /settlements:
+    get:
+      operationId: searchSettlements
+      summary: Settlements for a merchant
+      tags: [settlements]
+      parameters:
+        - name: merchantId
+          in: query
+          required: true
+          schema:
+            $ref: './crm.yaml#/components/schemas/MerchantId'
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/SettlementStatus'
+        - name: expected_after
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 10
+        - $ref: './common.yaml#/components/parameters/CorrelationId'
+      responses:
+        '200':
+          description: Matching settlements, most recent first.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: './common.yaml#/components/schemas/Page'
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Settlement'
+        '400':
+          $ref: './common.yaml#/components/responses/BadRequest'
+        '500':
+          $ref: './common.yaml#/components/responses/ServerError'
+  /chargebacks:
+    get:
+      operationId: searchChargebacks
+      summary: Chargebacks for a merchant
+      tags: [chargebacks]
+      parameters:
+        - name: merchantId
+          in: query
+          required: true
+          schema:
+            $ref: './crm.yaml#/components/schemas/MerchantId'
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/ChargebackStatus'
+        - name: capture_id
+          in: query
+          schema:
+            $ref: '#/components/schemas/CaptureId'
+        - $ref: './common.yaml#/components/parameters/CorrelationId'
+      responses:
+        '200':
+          description: Matching chargebacks.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: './common.yaml#/components/schemas/Page'
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Chargeback'
+        '400':
+          $ref: './common.yaml#/components/responses/BadRequest'
+        '500':
+          $ref: './common.yaml#/components/responses/ServerError'
+components:
+  schemas:
+    PaymentId:
+      type: string
+      pattern: '^pay_[A-Za-z0-9]+$'
+      examples: ['pay_8842A']
+    CaptureId:
+      type: string
+      pattern: '^cap_[A-Za-z0-9]+$'
+    RefundId:
+      type: string
+      pattern: '^rfnd_[A-Za-z0-9]+$'
+    PaymentStatus:
+      type: string
+      enum:
+        - created
+        - authorized
+        - captured
+        - partially_refunded
+        - refunded
+        - voided
+        - failed
+        - disputed
+      description: |
+        A refund may only be initiated from `captured` or `partially_refunded`.
+    PaymentMethod:
+      type: string
+      enum: [card, upi, netbanking, wallet]
+    Payment:
+      type: object
+      required:
+        [payment_id, merchant_id, order_ref, amount, method, status, created_at, captures, refunds]
+      additionalProperties: false
+      properties:
+        payment_id:
+          $ref: '#/components/schemas/PaymentId'
+        merchant_id:
+          $ref: './crm.yaml#/components/schemas/MerchantId'
+        order_ref:
+          type: string
+          description: Merchant-supplied, not unique within a merchant.
+        amount:
+          $ref: './common.yaml#/components/schemas/Money'
+        method:
+          $ref: '#/components/schemas/PaymentMethod'
+        status:
+          $ref: '#/components/schemas/PaymentStatus'
+        buyer_reference:
+          type: [string, 'null']
+          description: |
+            Last four digits or a masked handle. Never a full instrument
+            number; the contract has no field that could carry one.
+        created_at:
+          type: string
+          format: date-time
+        authorized_at:
+          type: [string, 'null']
+          format: date-time
+        captures:
+          type: array
+          items:
+            $ref: '#/components/schemas/Capture'
+        refunds:
+          type: array
+          items:
+            $ref: '#/components/schemas/Refund'
+    Capture:
+      type: object
+      required:
+        [capture_id, payment_id, amount, refunded_amount, refundable, captured_at, gateway_reference]
+      additionalProperties: false
+      properties:
+        capture_id:
+          $ref: '#/components/schemas/CaptureId'
+        payment_id:
+          $ref: '#/components/schemas/PaymentId'
+        amount:
+          $ref: './common.yaml#/components/schemas/Money'
+        refunded_amount:
+          $ref: './common.yaml#/components/schemas/Money'
+        refundable:
+          type: boolean
+          description: Service-computed. Authoritative input to a refund decision.
+        captured_at:
+          type: string
+          format: date-time
+        gateway_reference:
+          type: string
+          description: |
+            Upstream reference. Two captures on one payment sharing a gateway
+            reference indicate a client-retry artifact rather than two genuine
+            charges (S02).
+    RefundStatus:
+      type: string
+      enum: [pending, processed, failed]
+    RefundReasonCode:
+      type: string
+      enum: [duplicate, buyer_request, goods_not_delivered, fraud, goodwill]
+    RefundRequest:
+      type: object
+      required: [capture_id, amount, reason_code, initiated_by]
+      additionalProperties: false
+      properties:
+        capture_id:
+          $ref: '#/components/schemas/CaptureId'
+        amount:
+          $ref: './common.yaml#/components/schemas/Money'
+        reason_code:
+          $ref: '#/components/schemas/RefundReasonCode'
+        initiated_by:
+          type: string
+          enum: [agent, human, merchant]
+        approval_id:
+          type: [string, 'null']
+          description: |
+            Required by the tool layer whenever the policy engine assigned a
+            risk tier that demands human approval. The ledger records it so a
+            reviewer can trace a refund back to the decision that allowed it.
+        note:
+          type: [string, 'null']
+          maxLength: 1000
+    Refund:
+      type: object
+      required: [refund_id, capture_id, payment_id, amount, status, reason_code, created_at]
+      additionalProperties: false
+      properties:
+        refund_id:
+          $ref: '#/components/schemas/RefundId'
+        capture_id:
+          $ref: '#/components/schemas/CaptureId'
+        payment_id:
+          $ref: '#/components/schemas/PaymentId'
+        amount:
+          $ref: './common.yaml#/components/schemas/Money'
+        status:
+          $ref: '#/components/schemas/RefundStatus'
+        reason_code:
+          $ref: '#/components/schemas/RefundReasonCode'
+        initiated_by:
+          type: string
+          enum: [agent, human, merchant]
+        approval_id:
+          type: [string, 'null']
+        idempotency_key:
+          type: string
+        expected_credit_at:
+          type: [string, 'null']
+          format: date-time
+          description: Service estimate of when the buyer receives the funds.
+        created_at:
+          type: string
+          format: date-time
+        failure_reason:
+          type: [string, 'null']
+    SettlementStatus:
+      type: string
+      enum: [scheduled, processing, settled, failed, held]
+    Settlement:
+      type: object
+      required:
+        [settlement_id, merchant_id, gross_amount, fees, refunds_deducted, net_amount, status, expected_at]
+      additionalProperties: false
+      properties:
+        settlement_id:
+          type: string
+          pattern: '^setl_[A-Za-z0-9]+$'
+        merchant_id:
+          $ref: './crm.yaml#/components/schemas/MerchantId'
+        gross_amount:
+          $ref: './common.yaml#/components/schemas/Money'
+        fees:
+          $ref: './common.yaml#/components/schemas/Money'
+        refunds_deducted:
+          $ref: './common.yaml#/components/schemas/Money'
+        net_amount:
+          $ref: './common.yaml#/components/schemas/Money'
+        status:
+          $ref: '#/components/schemas/SettlementStatus'
+        expected_at:
+          type: string
+          format: date-time
+        settled_at:
+          type: [string, 'null']
+          format: date-time
+        utr:
+          type: [string, 'null']
+          description: Bank reference, present only once settled.
+        hold_reason:
+          type: [string, 'null']
+          enum: [kyc_review, risk_review, bank_account_invalid, negative_balance, null]
+    ChargebackStatus:
+      type: string
+      enum: [open, evidence_submitted, won, lost, accepted]
+    Chargeback:
+      type: object
+      required:
+        [chargeback_id, capture_id, merchant_id, amount, reason_code, network, status, evidence_due_at]
+      additionalProperties: false
+      properties:
+        chargeback_id:
+          type: string
+          pattern: '^cbk_[A-Za-z0-9]+$'
+        capture_id:
+          $ref: '#/components/schemas/CaptureId'
+        merchant_id:
+          $ref: './crm.yaml#/components/schemas/MerchantId'
+        amount:
+          $ref: './common.yaml#/components/schemas/Money'
+        reason_code:
+          type: string
+          enum:
+            - product_not_received
+            - product_unacceptable
+            - fraudulent
+            - duplicate_processing
+            - credit_not_processed
+            - subscription_cancelled
+        network:
+          type: string
+          enum: [visa, mastercard, rupay, amex]
+        status:
+          $ref: '#/components/schemas/ChargebackStatus'
+        evidence_due_at:
+          type: string
+          format: date-time
+          description: External deadline. Not negotiable, and never autonomously allowed to lapse.
+        opened_at:
+          type: string
+          format: date-time

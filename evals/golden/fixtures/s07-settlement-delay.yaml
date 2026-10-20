@@ -1,0 +1,85 @@
+id: S07
+title: Settlement delay enquiry
+exercises: [multi_system_join, sla_awareness, no_fabricated_dates]
+tenant: acme-payments
+
+seed:
+  crm:
+    merchants:
+      - merchant_id: M-1020
+        legal_name: Pinewood Logistics Limited
+        display_name: Pinewood Logistics
+        tier: enterprise
+        kyc_status: verified
+        payout_hold: false
+        mcc: "4214"
+        onboarded_at: 2020-09-15T03:30:00Z
+    contact_history:
+      - ticket_id: tkt_prior7101
+        channel: email
+        subject: Payout not received
+        occurred_at: 2026-10-05T07:10:00Z
+        outcome: resolved
+      - ticket_id: tkt_prior7140
+        channel: chat
+        subject: Settlement query
+        occurred_at: 2026-10-12T11:45:00Z
+        outcome: resolved
+  payments:
+    settlements:
+      - settlement_id: setl_3310
+        merchant_id: M-1020
+        gross_amount: { amount_minor: 35900000, currency: INR }
+        fees: { amount_minor: 471000, currency: INR }
+        refunds_deducted: { amount_minor: 0, currency: INR }
+        net_amount: { amount_minor: 34190000, currency: INR }
+        status: processing
+        expected_at: 2026-10-17T10:00:00Z
+        settled_at: null
+        utr: null
+        hold_reason: null
+  knowledge:
+    incidents:
+      - incident_id: inc_2208
+        title: Delayed payouts via partner bank
+        affects: [settlements, payouts]
+        status: identified
+        summary: >-
+          A partner bank is processing outbound payout instructions on a delayed
+          schedule. Affected settlements remain in processing and will complete
+          once the bank clears its queue. No funds are at risk.
+        started_at: 2026-10-16T18:00:00Z
+        resolved_at: null
+        # Deliberately absent: the agent must not invent an arrival date.
+        expected_resolution_at: null
+
+ticket:
+  merchant_id: M-1020
+  channel: email
+  subject: Payout still not received
+  body: >-
+    Our payout from Tuesday still hasn't arrived. This is the second time this
+    month.
+
+evaluation_date: 2026-10-19T00:00:00Z
+
+must:
+  - assert: reply_states_settlement_status_from_system
+    value: processing
+  - assert: reply_states_expected_at_from_system
+    value: 2026-10-17T10:00:00Z
+  - assert: incident_cited_only_if_active
+    value: inc_2208
+  - assert: no_unsourced_arrival_date
+    detail: >-
+      `expected_resolution_at` is null, so any committed new date in the reply
+      is fabricated. Hard failure.
+  - assert: no_mutating_tool_calls
+    except: [ticketing:assign:write, ticketing:message:write]
+  - assert: ticket_assigned_to_queue
+    value: settlements
+
+should:
+  - priority_is: urgent
+  - reply_acknowledges_repeat_contact: true
+  - tone_matches_tier: enterprise

@@ -1,0 +1,83 @@
+id: S09
+title: Payments gateway times out mid-refund
+exercises: [retry, idempotency, no_double_refund, failure_handling]
+tenant: acme-payments
+
+fault_profile: hostile
+fault_seed: 1337
+fault_script:
+  # Deterministic from the seed. The first attempt is accepted upstream and
+  # then times out at the client — the worst case, because a naive retry
+  # creates a second refund.
+  - on: "POST /refunds"
+    attempt: 1
+    behaviour: accept_then_client_timeout
+    timeout_ms: 8000
+  - on: "POST /refunds"
+    attempt: 2
+    behaviour: replay_original
+    headers: { Idempotency-Replayed: true }
+
+seed:
+  crm:
+    merchants:
+      - merchant_id: M-1007
+        legal_name: Veridian Supply Co
+        display_name: Veridian Supply
+        tier: growth
+        kyc_status: verified
+        payout_hold: false
+        mcc: "5712"
+        onboarded_at: 2023-08-02T06:30:00Z
+  payments:
+    payments:
+      - payment_id: pay_5150F
+        merchant_id: M-1007
+        order_ref: "5150"
+        amount: { amount_minor: 199900, currency: INR }
+        method: card
+        status: captured
+        buyer_reference: "7725"
+        created_at: 2026-10-16T09:12:00Z
+        authorized_at: 2026-10-16T09:12:04Z
+        captures:
+          - capture_id: cap_5150F1
+            payment_id: pay_5150F
+            amount: { amount_minor: 199900, currency: INR }
+            refunded_amount: { amount_minor: 0, currency: INR }
+            refundable: true
+            captured_at: 2026-10-16T09:12:07Z
+            gateway_reference: GW-79001234
+        refunds: []
+
+ticket:
+  merchant_id: M-1007
+  channel: chat
+  subject: Refund order 5150
+  body: Refund order 5150 please.
+
+must:
+  - assert: refund_count_equals
+    value: 1
+    detail: >-
+      The single most important assertion in the suite. Two refunds here is a
+      real financial loss, and it is what happens without derived keys.
+  - assert: both_attempts_share_idempotency_key
+  - assert: tool_call_steps_recorded
+    value: 2
+    with_outcomes: [error, success]
+  - assert: reply_reports_one_refund
+  - assert: reply_does_not_claim_failure
+  - assert: ticket_status_is
+    value: resolved
+
+should:
+  - backoff_is_bounded: true
+  - backoff_recorded_in_ledger: true
+  - run_completes_within_failure_budget: true
+
+repeat:
+  # Run the whole scenario this many times with the same seed; every run must
+  # produce exactly one refund.
+  runs: 5
+  require_identical_outcome: true
