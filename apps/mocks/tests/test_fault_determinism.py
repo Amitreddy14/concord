@@ -18,7 +18,6 @@ from fastapi.testclient import TestClient
 
 from apps.mocks.faults import FaultConfig, FaultInjector, FaultProfile, ScriptedFault
 from apps.mocks.serve import build
-from apps.mocks.tests.conftest import seed
 from evals.fixtures import Scenario, reset_payload
 
 REFUND_BODY: dict[str, Any] = {
@@ -37,9 +36,7 @@ class TestInjectorDeterminism:
         sequences = []
         for _ in range(3):
             injector = FaultInjector(FaultProfile.HOSTILE, seed=1337)
-            sequences.append(
-                [injector.decide("POST", "/refunds").behaviour for _ in range(20)]
-            )
+            sequences.append([injector.decide("POST", "/refunds").behaviour for _ in range(20)])
         assert sequences[0] == sequences[1] == sequences[2]
 
     def test_a_different_seed_produces_a_different_sequence(self) -> None:
@@ -96,7 +93,9 @@ class TestScenario09:
 
     @staticmethod
     def client(scenario: Scenario) -> TestClient:
-        app = build("payments", FaultConfig(profile=scenario.fault_profile, seed=scenario.fault_seed))
+        app = build(
+            "payments", FaultConfig(profile=scenario.fault_profile, seed=scenario.fault_seed)
+        )
         client = TestClient(app)
         client.post("/_test/reset", json=reset_payload(scenario))
         return client
@@ -114,9 +113,7 @@ class TestScenario09:
         assert first.json()["effect_applied"] is True
         assert len(client.app.state.store.refunds) == 1
 
-    def test_the_retry_returns_the_original_refund(
-        self, scenarios: dict[str, Scenario]
-    ) -> None:
+    def test_the_retry_returns_the_original_refund(self, scenarios: dict[str, Scenario]) -> None:
         client = self.client(scenarios["S09"])
         client.post("/refunds", json=REFUND_BODY, headers={"Idempotency-Key": DERIVED_KEY})
         retry = client.post("/refunds", json=REFUND_BODY, headers={"Idempotency-Key": DERIVED_KEY})
@@ -167,7 +164,9 @@ class TestScenario09:
         # refused anyway, because the unrefunded remainder is zero. The
         # idempotency key is not what saves this case.
         client = self.client(scenarios["S09"])
-        client.post("/refunds", json=REFUND_BODY, headers={"Idempotency-Key": "attempt-1-random-aaa"})
+        client.post(
+            "/refunds", json=REFUND_BODY, headers={"Idempotency-Key": "attempt-1-random-aaa"}
+        )
         second = client.post(
             "/refunds", json=REFUND_BODY, headers={"Idempotency-Key": "attempt-2-random-bbb"}
         )

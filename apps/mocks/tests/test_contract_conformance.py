@@ -65,9 +65,7 @@ class TestCrmConformance:
         self, crm: TestClient, scenarios: dict[str, Scenario]
     ) -> None:
         seed(crm, scenarios["S02"])
-        response = crm.post(
-            "/merchants/M-1007/notes", json={"body": "x", "author": "run_1"}
-        )
+        response = crm.post("/merchants/M-1007/notes", json={"body": "x", "author": "run_1"})
         assert response.status_code == 422  # FastAPI rejects the missing header
 
 
@@ -110,7 +108,9 @@ class TestPaymentsConformance:
         self, payments: TestClient, scenarios: dict[str, Scenario]
     ) -> None:
         seed(payments, scenarios["S07"])
-        settlement = payments.get("/settlements", params={"merchantId": "M-1020"}).json()["items"][0]
+        settlement = payments.get("/settlements", params={"merchantId": "M-1020"}).json()["items"][
+            0
+        ]
         for field in ("gross_amount", "fees", "refunds_deducted", "net_amount"):
             assert isinstance(settlement[field], dict), f"{field} must be a Money object"
             assert isinstance(settlement[field]["amount_minor"], int)

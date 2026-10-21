@@ -47,12 +47,8 @@ class TestOneEffectFromARepeatedCall:
     ) -> None:
         seed_all(services, scenarios["S03"])
 
-        first = await invoker.call(
-            "create_refund", REFUND, run_id="run_a", node="action"
-        )
-        second = await invoker.call(
-            "create_refund", REFUND, run_id="run_a", node="action"
-        )
+        first = await invoker.call("create_refund", REFUND, run_id="run_a", node="action")
+        second = await invoker.call("create_refund", REFUND, run_id="run_a", node="action")
 
         assert first.replayed is False
         assert second.replayed is True
@@ -210,12 +206,12 @@ class TestCircuitBreaker:
         # attempts than any test makes means the dependency is reliably down
         # rather than probabilistically so.
         services["payments"].state.injector.load_script(  # type: ignore[attr-defined]
-            [
-                ScriptedFault("GET /captures/{capture_id}", n, "server_error")
-                for n in range(1, 40)
-            ]
+            [ScriptedFault("GET /captures/{capture_id}", n, "server_error") for n in range(1, 40)]
         )
-        apps = {httpx.URL(u).host: a for u, a in zip(BASE_URLS.values(), services.values())}
+        apps = {
+            httpx.URL(u).host: a
+            for u, a in zip(BASE_URLS.values(), services.values(), strict=False)
+        }
         client = httpx.AsyncClient(transport=RoutingTransport(apps))
         invoker = ToolInvoker(
             tenant=tenant,
@@ -298,7 +294,9 @@ class TestLedger:
         self, invoker: ToolInvoker, services: dict[str, object], scenarios: dict[str, Scenario]
     ) -> None:
         seed_all(services, scenarios["S02"])
-        await invoker.call("get_capture", {"capture_id": "cap_8842A1"}, run_id="run_p", node="gather")
+        await invoker.call(
+            "get_capture", {"capture_id": "cap_8842A1"}, run_id="run_p", node="gather"
+        )
 
         steps = invoker.ledger.steps("run_p")
         assert [s.outcome for s in steps] == ["started", "success"]

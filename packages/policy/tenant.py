@@ -125,7 +125,9 @@ def load_tenant(tenant_id: str, directory: Path | None = None) -> TenantConfig:
     source = directory / f"{tenant_id}.yaml"
     if not source.is_file():
         available = ", ".join(sorted(p.stem for p in directory.glob("*.yaml"))) or "none"
-        raise TenantConfigError(f"no configuration for tenant {tenant_id!r}; available: {available}")
+        raise TenantConfigError(
+            f"no configuration for tenant {tenant_id!r}; available: {available}"
+        )
     document = yaml.safe_load(source.read_text(encoding="utf-8"))
     if not isinstance(document, dict):
         raise TenantConfigError(f"{source.name}: not a mapping")

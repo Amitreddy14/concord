@@ -50,9 +50,7 @@ def capture_view(store: Store, capture: dict[str, Any]) -> dict[str, Any]:
         "payment_id": capture["payment_id"],
         "amount": amount.to_payload(),
         "refunded_amount": refunded.to_payload(),
-        "refundable": (
-            payment.get("status") in REFUNDABLE_STATUSES and refunded < amount
-        ),
+        "refundable": (payment.get("status") in REFUNDABLE_STATUSES and refunded < amount),
         "captured_at": capture["captured_at"],
         "gateway_reference": capture["gateway_reference"],
     }
@@ -199,9 +197,7 @@ async def create_refund(
         for each in store.captures_for(payment["payment_id"]):
             total_captured = total_captured + Money.from_payload(each["amount"])
             total_refunded = total_refunded + store.refunded_total(each["capture_id"])
-        payment["status"] = (
-            "refunded" if total_refunded >= total_captured else "partially_refunded"
-        )
+        payment["status"] = "refunded" if total_refunded >= total_captured else "partially_refunded"
         return 201, refund
 
     return idempotent(
