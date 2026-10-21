@@ -30,8 +30,36 @@ from packages.shared.problem import VALIDATION_FAILED, ProblemError
 router = APIRouter(tags=["knowledge"])
 
 WORD = re.compile(r"[a-z0-9]+")
+MIN_TOP_K = 1
+MAX_TOP_K = 20
+
 STOPWORDS = frozenset(
-    "a an and are as at be by for from how in is it of on or that the to what when with your".split()
+    [
+        "a",
+        "an",
+        "and",
+        "are",
+        "as",
+        "at",
+        "be",
+        "by",
+        "for",
+        "from",
+        "how",
+        "in",
+        "is",
+        "it",
+        "of",
+        "on",
+        "or",
+        "that",
+        "the",
+        "to",
+        "what",
+        "when",
+        "with",
+        "your",
+    ]
 )
 
 
@@ -45,9 +73,7 @@ def is_effective(passage: dict[str, Any], on: date) -> bool:
     end = passage.get("effective_to")
     if start and date.fromisoformat(str(start)) > on:
         return False
-    if end and date.fromisoformat(str(end)) < on:
-        return False
-    return True
+    return not (end and date.fromisoformat(str(end)) < on)
 
 
 def score(query_terms: list[str], passage: dict[str, Any]) -> float:
@@ -79,8 +105,8 @@ async def search_passages(
         raise ProblemError(VALIDATION_FAILED, "tenant_id is required")
 
     top_k = int(payload.get("top_k", 6))
-    if not 1 <= top_k <= 20:
-        raise ProblemError(VALIDATION_FAILED, "top_k must be between 1 and 20")
+    if not MIN_TOP_K <= top_k <= MAX_TOP_K:
+        raise ProblemError(VALIDATION_FAILED, f"top_k must be between {MIN_TOP_K} and {MAX_TOP_K}")
     min_score = payload.get("min_score")
     doc_types = set(payload.get("doc_types") or [])
 

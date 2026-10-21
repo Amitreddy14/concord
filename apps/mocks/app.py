@@ -25,7 +25,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.routing import Match, Route
 
-from apps.mocks.faults import FaultConfig, FaultInjector
+from apps.mocks.faults import FaultConfig, FaultInjector, ScriptedFault
 from apps.mocks.idempotency import IdempotencyStore
 from apps.mocks.state import Store
 from packages.shared.problem import (
@@ -143,9 +143,7 @@ class FaultMiddleware(BaseHTTPMiddleware):
                 # expressible over a test client, and the tool layer treats
                 # both as retryable transport failures.
                 return problem_response(
-                    Problem(
-                        UPSTREAM_TIMEOUT, "injected connection reset", extra={"injected": True}
-                    )
+                    Problem(UPSTREAM_TIMEOUT, "injected connection reset", extra={"injected": True})
                 )
             case "latency":
                 await asyncio.sleep(decision.delay_ms / 1000)
@@ -218,8 +216,6 @@ def create_app(
             if "fault_seed" in payload:
                 app.state.injector.seed = int(payload["fault_seed"])
             if "fault_script" in payload:
-                from apps.mocks.faults import ScriptedFault
-
                 app.state.injector.load_script(
                     [ScriptedFault(**entry) for entry in payload["fault_script"]]
                 )
@@ -228,6 +224,9 @@ def create_app(
     app.include_router(control)
     app.include_router(router)
 
-    app.add_middleware(FaultMiddleware, injector=injector, owner=app)
+    # Starlette's add_middleware signature does not accommodate a
+    # BaseHTTPMiddleware subclass with extra constructor arguments; the
+    # call is correct at runtime.
+    app.add_middleware(FaultMiddleware, injector=injector, owner=app)  # type: ignore[arg-type]
     app.add_middleware(CorrelationMiddleware)
     return app

@@ -30,13 +30,13 @@ DEFAULT_SERVICES = {
 
 
 def post_json(url: str, payload: dict[str, Any], timeout: float = 10.0) -> dict[str, Any]:
-    request = urllib.request.Request(  # noqa: S310 - fixed localhost scheme
+    request = urllib.request.Request(
         url,
         data=json.dumps(payload).encode(),
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
+    with urllib.request.urlopen(request, timeout=timeout) as response:
         body: dict[str, Any] = json.loads(response.read())
         return body
 
@@ -82,13 +82,14 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{scenario_id}  {scenario.title}")
         return 0
 
-    scenario = scenarios.get(args.scenario.upper())
-    if scenario is None:
+    requested = args.scenario.upper()
+    if requested not in scenarios:
         print(
-            f"unknown scenario {args.scenario!r}; available: {', '.join(scenarios)}",
+            f"unknown scenario {requested!r}; available: {', '.join(scenarios)}",
             file=sys.stderr,
         )
         return 2
+    scenario = scenarios[requested]
 
     results = seed_scenario(scenario, DEFAULT_SERVICES)
     print(f"{scenario.scenario_id}  {scenario.title}")
