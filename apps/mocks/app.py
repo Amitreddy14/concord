@@ -16,12 +16,14 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
+from functools import cached_property
 from typing import Any
 
 from fastapi import APIRouter, FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.routing import Match, Route
 
 from apps.mocks.faults import FaultConfig, FaultInjector
 from apps.mocks.idempotency import IdempotencyStore
@@ -75,14 +77,46 @@ class FaultMiddleware(BaseHTTPMiddleware):
     precisely what S09 asserts against.
     """
 
-    def __init__(self, app: FastAPI, injector: FaultInjector) -> None:
+    def __init__(self, app: FastAPI, injector: FaultInjector, owner: FastAPI) -> None:
         super().__init__(app)
         self.injector = injector
+        # The FastAPI instance whose routes to match against. `app` here is
+        # the next ASGI layer, not necessarily the application object.
+        self._owner = owner
 
-    @staticmethod
-    def _route_template(request: Request) -> str:
-        route = request.scope.get("route")
-        return getattr(route, "path", request.url.path)
+    def _route_template(self, request: Request) -> str:
+        """The route's path template, e.g. ``/captures/{capture_id}``.
+
+        Resolved by matching the request against the app's routes rather than
+        read from ``request.scope["route"]``. BaseHTTPMiddleware runs before
+        routing, so that key is absent here, and falling back to the literal
+        path silently broke two things: a scripted fault on a parameterised
+        endpoint never fired, and profile-driven faults counted attempts per
+        id rather than per endpoint — so the sequence depended on which
+        records a run happened to touch.
+        """
+        scope = request.scope
+        for route in self._leaf_routes:
+            match, _ = route.matches(scope)
+            if match is not Match.NONE:
+                path: str = route.path
+                return path
+        return request.url.path
+
+    @cached_property
+    def _leaf_routes(self) -> list[Route]:
+        """Every concrete route, flattened out of the nested routers."""
+
+        def walk(router: Any) -> Iterator[Route]:
+            for route in getattr(router, "routes", []):
+                if isinstance(route, Route):
+                    yield route
+                    continue
+                nested = getattr(route, "original_router", None) or route
+                if nested is not route or hasattr(nested, "routes"):
+                    yield from walk(nested)
+
+        return list(walk(self._owner.router))
 
     async def dispatch(
         self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
@@ -194,6 +228,6 @@ def create_app(
     app.include_router(control)
     app.include_router(router)
 
-    app.add_middleware(FaultMiddleware, injector=injector)
+    app.add_middleware(FaultMiddleware, injector=injector, owner=app)
     app.add_middleware(CorrelationMiddleware)
     return app
