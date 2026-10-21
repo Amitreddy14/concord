@@ -48,16 +48,32 @@ def build_graph(context: nodes.NodeContext, checkpointer: Any | None = None) -> 
         ("gather", nodes.gather),
         ("retrieve", nodes.retrieve),
         ("draft", nodes.draft),
+        ("verify", nodes.verify_grounding),
     ):
         builder.add_node(name, bind(fn))  # type: ignore[call-overload]
 
     builder.add_edge(START, "triage")
     builder.add_edge("triage", "gather")
     builder.add_edge("gather", "retrieve")
-    builder.add_edge("retrieve", "draft")
-    builder.add_edge("draft", END)
+
+    # Retrieval returning nothing is an answer, not a failure: the corpus does
+    # not cover the question. Drafting anyway would produce a fluent reply
+    # with nothing behind it, which is the single most expensive thing this
+    # system could do. The edge skips to the verifier, which turns the empty
+    # result into a refusal.
+    builder.add_conditional_edges(
+        "retrieve",
+        _has_passages,
+        {"draft": "draft", "verify": "verify"},
+    )
+    builder.add_edge("draft", "verify")
+    builder.add_edge("verify", END)
 
     return builder.compile(checkpointer=checkpointer or MemorySaver())
+
+
+def _has_passages(state: AgentState) -> str:
+    return "draft" if state.get("passages") else "verify"
 
 
 def initial_state(
