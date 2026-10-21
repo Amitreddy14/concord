@@ -18,7 +18,7 @@ dependencies = [
 mocks = ["fastapi>=0.115", "uvicorn[standard]>=0.30"]
 # httpx backs starlette's TestClient, which the mock service tests use.
 # pytest-asyncio drives the tool layer's async tests.
-dev = ["ruff>=0.6", "mypy>=1.11", "pytest>=8.3", "pytest-asyncio>=0.24", "httpx>=0.27"]
+dev = ["ruff>=0.6", "mypy>=1.11", "pytest>=8.3", "pytest-asyncio>=0.24", "httpx>=0.27", "types-PyYAML>=6.0"]
 
 # The repository is a monorepo of top-level packages rather than one source
 # package, so discovery is explicit. The console is TypeScript and is not a
@@ -34,19 +34,57 @@ extend-exclude = ["apps/console"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "UP", "B", "SIM", "RUF", "ANN", "PL"]
-# ANN101/102 (self, cls) are noise; the money rule below is the one that matters.
-ignore = ["ANN101", "ANN102"]
+ignore = [
+  # `Any` is correct where the value genuinely is arbitrary: JSON payloads
+  # crossing a service boundary, a tree walker over an OpenAPI document, a
+  # ledger that stores whatever a step produced. Annotating those as anything
+  # narrower would be a lie that the type checker then enforces.
+  "ANN401",
+  # Exception names here read as what went wrong — ScopeViolation, CircuitOpen,
+  # ContextBudgetExceeded. Renaming them to ScopeViolationError would make
+  # every raise site worse to read for no gain.
+  "N818",
+  # A function taking many *keyword-only* arguments is a readable API, not a
+  # smell; the gateway's complete() is the example. Ruff counts them the same
+  # as positional ones, which is the part we disagree with.
+  "PLR0913",
+  "PLR0917",
+]
+
+[tool.ruff.lint.pylint]
+# classify() maps a status and a code onto an error kind, and main() in the
+# validator reports several categories. Both are flat dispatch, which is the
+# clearest shape for them.
+max-returns = 10
+max-branches = 15
 
 [tool.ruff.lint.per-file-ignores]
+# Tests compare against literals by design — that is what an assertion is —
+# and fixture helpers take untyped pytest fixtures.
+"**/tests/**" = ["PLR2004", "ANN001", "ANN201", "ANN202", "ANN205", "PLC0415", "S101"]
 "evals/**" = ["PLR2004"]
-"scripts/**" = ["PLR0912"]
+# Importing inside a function is deliberate in a few places: avoiding a cycle,
+# or keeping an optional dependency out of module import time.
+"scripts/**" = ["PLR2004", "PLC0415"]
+"packages/shared/ledger.py" = ["PLC0415"]
+"packages/agent/prompts.py" = ["PLC0415"]
 
 [tool.mypy]
 python_version = "3.12"
 strict = true
 warn_unreachable = true
 disallow_any_explicit = false
-exclude = ["apps/console"]
+# Production code only. --strict on test modules fights pytest's fixture
+# injection and the deliberate type violations a test needs to make — asserting
+# that Money rejects a float requires passing one. The value of strict typing is
+# in the code that runs in production; enforcing it on tests buys noise.
+exclude = ["apps/console", ".*/tests/.*"]
+
+[[tool.mypy.overrides]]
+# LangGraph ships types but its add_node overloads do not accept a plain async
+# callable over a TypedDict, which is how the nodes are written.
+module = "langgraph.*"
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["packages", "apps", "evals"]
