@@ -139,8 +139,8 @@ def split_long(text: str) -> list[str]:
     chunks: list[str] = []
     current: list[str] = []
     size = 0
-    for paragraph in text.split("\n\n"):
-        paragraph = paragraph.strip()
+    for raw in text.split("\n\n"):
+        paragraph = raw.strip()
         if not paragraph:
             continue
         if size and size + len(paragraph) > MAX_PASSAGE_CHARS:

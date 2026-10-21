@@ -35,20 +35,9 @@ seed:
             captured_at: 2026-03-19T07:05:07Z
             gateway_reference: GW-71220876
         refunds: []
-  knowledge:
-    passages:
-      - passage_id: psg_refund-policy.v3.s1
-        document_id: refund-policy
-        doc_type: policy
-        title: Refund eligibility
-        section: "1. Eligibility window"
-        text: >-
-          A refund may be initiated within 180 days of the original capture.
-          Beyond that period the transaction can no longer be reversed through
-          the platform, and the merchant must settle with the buyer directly or
-          raise a case with their account manager.
-        version: v3
-        effective_from: 2026-01-01
+  # Passages come from the tenant's configured corpus rather than being
+  # seeded here. Seeding them bypassed the retrieval this scenario exists to
+  # exercise, and left two copies of the policy text to drift apart.
 
 ticket:
   merchant_id: M-1003
@@ -68,7 +57,7 @@ must:
   - assert: refund_count_equals
     value: 0
   - assert: reply_cites_window_rule
-    value: psg_refund-policy.v3.s1
+    value: psg_refund-policy.v3.eligibility-window
   - assert: ticket_status_is
     value: escalated
     detail: Not silently resolved; a refused request still needs a human owner.

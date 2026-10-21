@@ -78,8 +78,10 @@ class TestSubmission:
 
         assert run.status is RunStatus.COMPLETED
         assert run.result["intent"] == "status_question"
-        assert run.result["visited"] == ["triage", "gather", "retrieve", "draft"]
-        assert run.result["draft"]["citations"] == ["psg_refund-policy.v3.s2"]
+        assert run.result["visited"] == ["triage", "gather", "retrieve", "draft", "verify"]
+        assert run.result["reply"]["citations"] == ["psg_refund-policy.v3.credit-timelines"]
+        assert run.result["reply"]["is_refusal"] is False
+        assert run.result["grounding"]["verdict"] == "supported"
         assert run.result["usage"]["calls"] == 2
 
     async def test_progress_events_name_each_node(self, deps: Any) -> None:
@@ -92,7 +94,7 @@ class TestSubmission:
         assert kinds[0] == "run.started"
         assert kinds[-1] == "run.finished"
         nodes = [e.detail["node"] for e in run.events if e.kind == "node.completed"]
-        assert nodes == ["triage", "gather", "retrieve", "draft"]
+        assert nodes == ["triage", "gather", "retrieve", "draft", "verify"]
 
     async def test_a_failure_becomes_a_terminal_state_not_a_lost_task(self, deps: Any) -> None:
         # A background task that dies silently is worse than one that fails
@@ -142,7 +144,7 @@ class TestStreaming:
         await task
 
         assert "run.started" in seen
-        assert seen.count("node.completed") == 4
+        assert seen.count("node.completed") == 5
 
     async def test_a_disconnecting_subscriber_does_not_stall_the_run(self, deps: Any) -> None:
         run = deps.store.create(
