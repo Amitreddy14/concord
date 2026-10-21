@@ -30,7 +30,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 
 from packages.knowledge.chunking import Passage
-from packages.knowledge.embeddings import STOPWORDS, Embedder, content_tokens, cosine
+from packages.knowledge.embeddings import Embedder, content_tokens, cosine
 
 # The standard RRF constant. Large enough that the top few ranks are not
 # wildly over-weighted, small enough that rank 1 still beats rank 10 clearly.
@@ -38,6 +38,18 @@ RRF_K = 60
 
 BM25_K1 = 1.5
 BM25_B = 0.75
+
+# A term appearing in more than this proportion of the corpus carries no
+# discriminative power and is treated as a corpus-specific stopword.
+#
+# The general stopword list cannot cover this: "merchant" is a content word in
+# English and a stopword in a payments corpus, where it appears in most
+# passages. Without the cut, a query whose only overlap with the corpus is the
+# word "merchant" scores as a match — which is what let "Merchant asks for a
+# restaurant recommendation" retrieve policy passages and defeat the refusal
+# path. Standard practice, and the threshold is a property of the corpus
+# rather than a tuned constant.
+MAX_DOCUMENT_FREQUENCY_RATIO = 0.5
 
 # A dense retriever ranks every passage, including for a query about nothing
 # in the corpus. RRF then turns "least irrelevant" into a rank, and a rank into
@@ -49,6 +61,7 @@ BM25_B = 0.75
 # refuses. A passage must clear an absolute similarity floor before it is
 # allowed a rank at all — and the floor comes from the embedder, since it is a
 # property of the embedding space rather than of the fusion.
+
 
 @dataclass(frozen=True, slots=True)
 class Hit:
@@ -90,6 +103,16 @@ class BM25:
         total = len(self._documents)
         if not terms or total == 0:
             return []
+
+        # Discard terms too common in this corpus to distinguish anything.
+        # Keep at least one term, so a query made entirely of common words
+        # still searches on its best available signal rather than on nothing.
+        discriminative = [
+            t
+            for t in terms
+            if self._document_frequency.get(t, 0) <= total * MAX_DOCUMENT_FREQUENCY_RATIO
+        ]
+        terms = discriminative or terms
 
         scored: list[tuple[int, float]] = []
         for index, frequency in enumerate(self._frequencies):
@@ -144,8 +167,7 @@ class HybridIndex:
         eligible = {
             index
             for index, passage in enumerate(self.passages)
-            if (not doc_types or passage.doc_type in doc_types)
-            and _is_effective(passage, on_date)
+            if (not doc_types or passage.doc_type in doc_types) and _is_effective(passage, on_date)
         }
         if not eligible:
             return []
@@ -161,12 +183,8 @@ class HybridIndex:
                 key=lambda pair: (-pair[1], pair[0]),
             )
             floor = getattr(self.embedder, "similarity_floor", 0.25)
-            above_floor = [
-                (index, score) for index, score in similarities if score >= floor
-            ]
-            dense_rank = {
-                index: rank for rank, (index, _) in enumerate(above_floor, start=1)
-            }
+            above_floor = [(index, score) for index, score in similarities if score >= floor]
+            dense_rank = {index: rank for rank, (index, _) in enumerate(above_floor, start=1)}
 
         fused: dict[int, float] = {}
         for index, rank in lexical_rank.items():
