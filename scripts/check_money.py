@@ -39,6 +39,12 @@ MONEY_FILENAMES = ("money",)
 MONEY_MODULE = "packages.shared.money"
 
 # Identifiers whose division is almost certainly a money bug.
+#
+# Deliberately specific. `total` and `subtotal` were here and pulled in the
+# retry module, whose only `total` counts milliseconds — and a checker that
+# flags code handling no money is a checker that gets switched off. The
+# domain's amount fields are named precisely enough that the generic words
+# cost more in false positives than they earn.
 AMOUNT_NAMES = {
     "amount",
     "amount_minor",
@@ -46,8 +52,8 @@ AMOUNT_NAMES = {
     "net_amount",
     "fees",
     "refunded_amount",
-    "total",
-    "subtotal",
+    "refunds_deducted",
+    "autonomy_cap_minor",
 }
 
 
