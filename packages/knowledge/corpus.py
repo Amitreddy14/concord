@@ -72,7 +72,9 @@ def load_passages(tenant_id: str, root: Path | None = None) -> list[Passage]:
         for path in sorted(source.path.rglob("*.md")):
             passages.extend(chunk_document(path))
     if not passages:
-        raise CorpusError(f"tenant {tenant_id!r} has a configured corpus but it contains no documents")
+        raise CorpusError(
+            f"tenant {tenant_id!r} has a configured corpus but it contains no documents"
+        )
     return passages
 
 

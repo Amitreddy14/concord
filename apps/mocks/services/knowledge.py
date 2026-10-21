@@ -89,9 +89,7 @@ async def search_passages(
 
     top_k = int(payload.get("top_k", 6))
     if not MIN_TOP_K <= top_k <= MAX_TOP_K:
-        raise ProblemError(
-            VALIDATION_FAILED, f"top_k must be between {MIN_TOP_K} and {MAX_TOP_K}"
-        )
+        raise ProblemError(VALIDATION_FAILED, f"top_k must be between {MIN_TOP_K} and {MAX_TOP_K}")
     min_score = payload.get("min_score")
     doc_types = set(payload.get("doc_types") or [])
     today = datetime.now(UTC).date()
@@ -118,9 +116,7 @@ async def search_passages(
                 continue
             haystack = set(
                 content_terms(
-                    " ".join(
-                        str(passage.get(f, "")) for f in ("title", "section", "text")
-                    )
+                    " ".join(str(passage.get(f, "")) for f in ("title", "section", "text"))
                 )
             )
             overlap = len(terms & haystack) / len(terms) if terms else 0.0
