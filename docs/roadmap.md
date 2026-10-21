@@ -51,7 +51,7 @@ guarantee cannot pass vacuously.
 **Branch** `phase/2-tool-layer`
 
 **Deliverables**
-- Typed clients generated against the contracts, Pydantic v2 at every boundary.
+- Typed clients written against the contracts, Pydantic v2 at every boundary.
 - A tool registry: name, argument schema, authorization scope, mutating flag, retry policy.
 - Derived idempotency keys per the domain model.
 - Retry with bounded exponential backoff and jitter; circuit breaker per dependency.
@@ -61,6 +61,11 @@ guarantee cannot pass vacuously.
 **Done when** a mutating tool called twice with the same arguments inside one run produces one
 effect, scope violations raise before any network call, and the circuit breaker opens and
 recovers under the `hostile` profile.
+
+**Verified.** 139 tests, run against the real mock services rather than stubs. A scope violation
+is asserted by the ledger showing no scope used and the service holding no refund, not only by
+the exception. S09 now passes end to end through the tool layer: two attempts, one refund, the
+retry reporting a replay.
 
 ---
 
