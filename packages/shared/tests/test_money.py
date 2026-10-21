@@ -31,7 +31,9 @@ class TestConstruction:
 
     def test_from_payload_rejects_a_float_amount(self) -> None:
         with pytest.raises(MoneyError, match="arrived as a float"):
-            Money.from_payload({"amount_minor": 2450.0, "currency": "INR"})  # allow-float: asserts rejection
+            Money.from_payload(
+                {"amount_minor": 2450.0, "currency": "INR"}
+            )  # allow-float: asserts rejection
 
     def test_payload_round_trip(self) -> None:
         original = Money(245000, "INR")
