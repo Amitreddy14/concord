@@ -10,61 +10,33 @@ in phase 4. And a passage outside its effective dates is never returned as
 current policy, so a superseded refund window cannot be cited as if it still
 applied.
 
-The ranking here is lexical only. Phase 4 replaces it with hybrid dense and
-lexical retrieval over pgvector; this exists so the services are complete and
-the tool layer has something to integrate against, not as the real thing.
+Retrieval is hybrid — BM25 and dense vectors fused by reciprocal rank — and
+lives in ``packages.knowledge``, so the same engine serves this mock and a
+real deployment. What the mock stands in for is the *corpus being someone
+else's*, not the retrieval being fake.
+
+An empty result is a normal outcome and the signal for the agent's refusal
+path. A retriever that always returns something is a retriever that makes the
+agent incapable of saying "the policy does not cover this".
 """
 
 from __future__ import annotations
 
-import re
 from datetime import UTC, date, datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Body, Depends, Query
+from fastapi import APIRouter, Body, Depends, Query, Request
 
 from apps.mocks.deps import get_store, page
 from apps.mocks.state import Store
-from packages.shared.problem import VALIDATION_FAILED, ProblemError
+from packages.knowledge.corpus import CorpusError, build_index
+from packages.knowledge.retrieval import HybridIndex, content_terms
+from packages.shared.problem import UPSTREAM_FAILURE, VALIDATION_FAILED, ProblemError
 
 router = APIRouter(tags=["knowledge"])
 
-WORD = re.compile(r"[a-z0-9]+")
 MIN_TOP_K = 1
 MAX_TOP_K = 20
-
-STOPWORDS = frozenset(
-    [
-        "a",
-        "an",
-        "and",
-        "are",
-        "as",
-        "at",
-        "be",
-        "by",
-        "for",
-        "from",
-        "how",
-        "in",
-        "is",
-        "it",
-        "of",
-        "on",
-        "or",
-        "that",
-        "the",
-        "to",
-        "what",
-        "when",
-        "with",
-        "your",
-    ]
-)
-
-
-def tokenize(text: str) -> list[str]:
-    return [w for w in WORD.findall(text.lower()) if w not in STOPWORDS and len(w) > 1]
 
 
 def is_effective(passage: dict[str, Any], on: date) -> bool:
@@ -76,62 +48,90 @@ def is_effective(passage: dict[str, Any], on: date) -> bool:
     return not (end and date.fromisoformat(str(end)) < on)
 
 
-def score(query_terms: list[str], passage: dict[str, Any]) -> float:
-    """Overlap between query and passage, normalised by query length.
+async def index_for(request: Request, tenant_id: str) -> HybridIndex | None:
+    """The hybrid index for a tenant, if a corpus is configured for it.
 
-    Deliberately crude. Making this cleverer would be building phase 4 early
-    and in the wrong place; retrieval quality belongs behind the tool layer,
-    not inside the mock.
+    Seeded fixtures take precedence: a scenario that pins exact passages is
+    describing a requirement, and silently serving it a different corpus would
+    make the fixture a suggestion.
     """
-    if not query_terms:
-        return 0.0
-    haystack = " ".join(
-        str(passage.get(field, "")) for field in ("title", "section", "text")
-    ).lower()
-    tokens = set(tokenize(haystack))
-    hits = sum(1 for term in set(query_terms) if term in tokens)
-    return hits / len(set(query_terms))
+    store: Store = request.app.state.store
+    if store.passages:
+        return None
+    cached: dict[str, HybridIndex] = request.app.state.indexes
+    if tenant_id not in cached:
+        try:
+            cached[tenant_id] = await build_index(tenant_id, cache=False)
+        except CorpusError as error:
+            # A tenant with no corpus configured at all is a legitimate state
+            # during development; one whose configured corpus is missing is a
+            # deployment error and must not be served as "no results".
+            if "declares no grounding.corpus" in str(error):
+                return None
+            raise ProblemError(
+                UPSTREAM_FAILURE, f"corpus unavailable for {tenant_id}: {error}"
+            ) from error
+    return cached[tenant_id]
 
 
 @router.post("/search")
 async def search_passages(
+    request: Request,
     store: Annotated[Store, Depends(get_store)],
     payload: Annotated[dict[str, Any], Body()],
 ) -> dict[str, Any]:
     query = payload.get("query")
     if not isinstance(query, str) or not query.strip():
         raise ProblemError(VALIDATION_FAILED, "query is required")
-    if not payload.get("tenant_id"):
+    tenant_id = payload.get("tenant_id")
+    if not tenant_id:
         raise ProblemError(VALIDATION_FAILED, "tenant_id is required")
 
     top_k = int(payload.get("top_k", 6))
     if not MIN_TOP_K <= top_k <= MAX_TOP_K:
-        raise ProblemError(VALIDATION_FAILED, f"top_k must be between {MIN_TOP_K} and {MAX_TOP_K}")
+        raise ProblemError(
+            VALIDATION_FAILED, f"top_k must be between {MIN_TOP_K} and {MAX_TOP_K}"
+        )
     min_score = payload.get("min_score")
     doc_types = set(payload.get("doc_types") or [])
-
     today = datetime.now(UTC).date()
-    terms = tokenize(query)
 
-    candidates: list[dict[str, Any]] = []
-    for passage in store.passages.values():
-        if doc_types and passage.get("doc_type") not in doc_types:
-            continue
-        if not is_effective(passage, today):
-            continue
-        value = score(terms, passage)
-        if min_score is not None and value < float(min_score):
-            continue
-        if value <= 0:
-            continue
-        candidates.append({**passage, "score": round(value, 4)})
-
-    # Ties break on passage id so repeated identical queries return an
-    # identical order; replay depends on it.
-    candidates.sort(key=lambda p: (-p["score"], p["passage_id"]))
+    index = await index_for(request, str(tenant_id))
+    if index is not None:
+        hits = await index.search(
+            query,
+            top_k=top_k,
+            doc_types=doc_types or None,
+            min_score=float(min_score) if min_score is not None else None,
+            on_date=today.isoformat(),
+        )
+        passages = [{**h.passage.to_payload(), "score": h.score} for h in hits]
+    else:
+        # Fixture-seeded passages: scored by term overlap, which is enough for
+        # a fixture that pins which passages exist and expects them found.
+        terms = set(content_terms(query))
+        scored: list[dict[str, Any]] = []
+        for passage in store.passages.values():
+            if doc_types and passage.get("doc_type") not in doc_types:
+                continue
+            if not is_effective(passage, today):
+                continue
+            haystack = set(
+                content_terms(
+                    " ".join(
+                        str(passage.get(f, "")) for f in ("title", "section", "text")
+                    )
+                )
+            )
+            overlap = len(terms & haystack) / len(terms) if terms else 0.0
+            if overlap <= 0 or (min_score is not None and overlap < float(min_score)):
+                continue
+            scored.append({**passage, "score": round(overlap, 4)})
+        scored.sort(key=lambda p: (-p["score"], p["passage_id"]))
+        passages = scored[:top_k]
 
     return {
-        "passages": candidates[:top_k],
+        "passages": passages,
         "query_id": f"q_{abs(hash((query, tuple(sorted(doc_types)), top_k))) % 10**10:010d}",
     }
 
