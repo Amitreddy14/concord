@@ -70,6 +70,12 @@ jobs:
       - name: Enforce the money rule
         run: make money
 
+      # An import that pyproject does not declare works on a developer's
+      # machine and fails on the first clean install. This is how langgraph
+      # shipped undeclared in phase 3.
+      - name: Check declared dependencies cover every import
+        run: make deps
+
       - name: Run the test suite
         run: make test
 

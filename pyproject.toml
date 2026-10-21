@@ -12,10 +12,17 @@ dependencies = [
   "pyyaml>=6.0",
   # The tool layer speaks HTTP to the systems of record.
   "httpx>=0.27",
+  # The agent runtime. Floor is the version the graph was written against;
+  # `interrupt` and `Command` are the parts phase 6 depends on (ADR 0001).
+  "langgraph>=1.2",
 ]
 
 [project.optional-dependencies]
-mocks = ["fastapi>=0.115", "uvicorn[standard]>=0.30"]
+# starlette is declared explicitly: the mock app imports it directly for
+# BaseHTTPMiddleware and route matching, and relying on it arriving
+# transitively through fastapi makes that import break the day fastapi
+# changes how it depends on it.
+mocks = ["fastapi>=0.115", "uvicorn[standard]>=0.30", "starlette>=0.40"]
 # httpx backs starlette's TestClient, which the mock service tests use.
 # pytest-asyncio drives the tool layer's async tests.
 dev = ["ruff>=0.6", "mypy>=1.11", "pytest>=8.3", "pytest-asyncio>=0.24", "httpx>=0.27", "types-PyYAML>=6.0"]
