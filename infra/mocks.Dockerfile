@@ -13,11 +13,11 @@ COPY pyproject.toml ./
 RUN pip install --no-cache-dir -e ".[mocks]" || pip install --no-cache-dir fastapi uvicorn pydantic pyyaml
 
 COPY contracts/ ./contracts/
-COPY packages/shared/ ./packages/shared/
-COPY apps/mocks/ ./apps/mocks/
-COPY evals/golden/fixtures/ ./evals/golden/fixtures/
+COPY packages/ ./packages/
+COPY apps/ ./apps/
+COPY evals/ ./evals/
 
-# Phase 1 implements the service entrypoint. Until then the image builds and
-# the compose stack is wiring that can be brought up a service at a time.
+# The service is chosen by argument: one image for all four, so the shared
+# middleware is identical rather than four copies that drift.
 ENTRYPOINT ["python", "-m", "apps.mocks.serve"]
 CMD ["--help"]
