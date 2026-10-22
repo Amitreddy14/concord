@@ -37,9 +37,7 @@ class TestScenario09ThroughTheToolLayer:
         # which is the point.
         seed_all(services, scenarios["S09"])
 
-        result = await invoker.call(
-            "create_refund", S09_REFUND, run_id="run_s09", node="action"
-        )
+        result = await invoker.call("create_refund", S09_REFUND, run_id="run_s09", node="action")
 
         assert result.attempts == 2
         assert result.replayed is True

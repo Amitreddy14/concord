@@ -84,6 +84,14 @@ retry reporting a replay.
 **Done when** S01 passes end to end against the mocks, and a resident-model restart does not
 lose a queued run.
 
+**Verified.** 162 tests. S01 runs through all four nodes with a cited reply and no mutating tool
+call. A gateway failure classified retryable — the model being evicted mid-run — leaves the run
+reaching the same end state. Untrusted containment is asserted by stripping every fenced region
+from each assembled prompt and requiring the payload to be absent from what remains.
+
+`make check` is also real for the first time: lint, format, `mypy --strict` on production code,
+contracts, the money rule and the suite all run in CI.
+
 ---
 
 ## Phase 4 — Knowledge grounding

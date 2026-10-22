@@ -123,8 +123,23 @@ def check_references(specs: dict[Path, dict[str, Any]], root: Path, findings: Fi
                 findings.add(path.name, f"{trail} -> {ref}: pointer does not resolve")
 
 
+def _check_money_shape(path: Path, document: dict[str, Any], findings: Findings) -> None:
+    """Money must always be the shared object, never a loose number field."""
+    for trail, node in walk(document):
+        if not isinstance(node, dict):
+            continue
+        name = trail.rsplit("/", 1)[-1]
+        if name not in {"amount", "amount_minor", "net_amount", "gross_amount", "fees"}:
+            continue
+        if name == "amount_minor" and node.get("type") == "integer":
+            continue
+        if node.get("type") == "number":
+            findings.add(path.name, f"{trail}: money as a bare number; use the Money schema")
+
+
 def check_house_rules(specs: dict[Path, dict[str, Any]], findings: Findings) -> None:
     for path, document in specs.items():
+        _check_money_shape(path, document, findings)
         paths_obj = document.get("paths") or {}
 
         for route, operations in paths_obj.items():
@@ -166,18 +181,6 @@ def check_house_rules(specs: dict[Path, dict[str, Any]], findings: Findings) -> 
                             path.name,
                             f"{where} {code}: error response does not use the shared Problem shape",
                         )
-
-        # Money must always be the shared object, never a loose number field.
-        for trail, node in walk(document):
-            if not isinstance(node, dict):
-                continue
-            name = trail.rsplit("/", 1)[-1]
-            if name not in {"amount", "amount_minor", "net_amount", "gross_amount", "fees"}:
-                continue
-            if name == "amount_minor" and node.get("type") == "integer":
-                continue
-            if node.get("type") == "number":
-                findings.add(path.name, f"{trail}: money as a bare number; use the Money schema")
 
 
 def check_fixtures(fixture_dir: Path, scenarios_doc: Path, findings: Findings) -> None:

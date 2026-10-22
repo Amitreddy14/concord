@@ -59,10 +59,22 @@ jobs:
       - name: Install the project and its development dependencies
         run: python -m pip install --quiet -e ".[mocks,dev]" httpx
 
+      - name: Lint and format check
+        run: make lint
+
+      - name: Static type check
+        run: make types
+
       # The no-floats-near-money rule. CONTRIBUTING claims it is enforced,
       # which is only true if something runs it.
       - name: Enforce the money rule
         run: make money
+
+      # An import that pyproject does not declare works on a developer's
+      # machine and fails on the first clean install. This is how langgraph
+      # shipped undeclared in phase 3.
+      - name: Check declared dependencies cover every import
+        run: make deps
 
       - name: Run the test suite
         run: make test

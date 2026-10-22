@@ -37,9 +37,7 @@ def canonical(arguments: Any) -> str:
     return json.dumps(arguments, sort_keys=True, separators=(",", ":"), default=str)
 
 
-def derive_idempotency_key(
-    *, run_id: str, node: str, tool: str, arguments: Any
-) -> str:
+def derive_idempotency_key(*, run_id: str, node: str, tool: str, arguments: Any) -> str:
     """The key for one logical mutation within one run."""
     if not run_id or not node or not tool:
         raise ValueError("run_id, node and tool are all required to derive a key")

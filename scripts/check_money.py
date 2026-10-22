@@ -17,6 +17,12 @@ mandatory and is not checked for sense — the point is that waiving the rule
 costs a sentence, so it happens where a test asserts a float is rejected and
 nowhere else.
 
+The waiver is honoured anywhere within the statement the finding belongs to,
+not only on the exact line. A formatter is free to split an expression across
+lines, and it will put a trailing comment on the closing bracket rather than
+beside the literal; requiring an exact line match would mean `make lint` and
+`make money` could not both pass on the same file.
+
 Run as ``python -m scripts.check_money`` (part of ``make check``).
 """
 
@@ -24,7 +30,6 @@ from __future__ import annotations
 
 import ast
 import re
-import sys
 from pathlib import Path
 
 SKIP_DIRS = {".git", "node_modules", ".venv", "venv", ".mypy_cache", ".ruff_cache", "__pycache__"}
@@ -101,6 +106,34 @@ class MoneyVisitor(ast.NodeVisitor):
         return False
 
 
+def _waiver_ranges(tree: ast.Module, lines: list[str]) -> list[tuple[int, int]]:
+    """Line spans of statements whose last line carries a waiver.
+
+    A formatter puts a trailing comment on the closing bracket, so a finding
+    on the literal inside a split expression needs the waiver on the
+    statement, not on its own line.
+    """
+    spans: list[tuple[int, int]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.stmt):
+            continue
+        end = getattr(node, "end_lineno", None)
+        if end is None:
+            continue
+        for lineno in range(node.lineno, end + 1):
+            if 0 < lineno <= len(lines) and ALLOW_FLOAT.search(lines[lineno - 1]):
+                spans.append((node.lineno, end))
+                break
+    return spans
+
+
+def _is_waived(lineno: int, lines: list[str], spans: list[tuple[int, int]]) -> bool:
+    line = lines[lineno - 1] if 0 < lineno <= len(lines) else ""
+    if ALLOW_FLOAT.search(line):
+        return True
+    return any(start <= lineno <= end for start, end in spans)
+
+
 def is_money_module(path: Path, tree: ast.Module) -> bool:
     """Whether this module actually handles amounts.
 
@@ -157,9 +190,9 @@ def main() -> int:
         visitor.visit(tree)
 
         lines = source.splitlines()
+        waiver_ranges = _waiver_ranges(tree, lines)
         for lineno, message in visitor.findings:
-            line = lines[lineno - 1] if 0 < lineno <= len(lines) else ""
-            if ALLOW_FLOAT.search(line):
+            if _is_waived(lineno, lines, waiver_ranges):
                 waived += 1
                 continue
             findings.append(f"{path.relative_to(root)}:{lineno}: {message}")

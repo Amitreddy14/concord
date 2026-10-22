@@ -108,9 +108,7 @@ def delay_for_attempt(
     return int(jittered)
 
 
-def schedule(
-    policy: RetryPolicy, *, run_id: str, node: str, tool: str
-) -> list[int]:
+def schedule(policy: RetryPolicy, *, run_id: str, node: str, tool: str) -> list[int]:
     """The full delay schedule, truncated by the total-delay ceiling.
 
     Returned as a list so a caller — or a test — can see the whole plan

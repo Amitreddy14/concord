@@ -173,7 +173,7 @@ queued ──> running ──> completed
 Integer minor units plus an ISO 4217 code, always together, never apart.
 
 ```python
-Money(amount_minor=4120000, currency="INR")   # ₹41,200.00
+Money(amount_minor=4120000, currency="INR")  # ₹41,200.00
 ```
 
 Rules, enforced by lint rather than by discipline:

@@ -71,10 +71,13 @@ class CircuitBreaker:
     @property
     def state(self) -> BreakerState:
         """The current state, accounting for an elapsed cooldown."""
-        if self._state is BreakerState.OPEN and self._opened_at is not None:
-            if self.clock() - self._opened_at >= self.cooldown:
-                self._state = BreakerState.HALF_OPEN
-                self._half_open_in_flight = False
+        if (
+            self._state is BreakerState.OPEN
+            and self._opened_at is not None
+            and self.clock() - self._opened_at >= self.cooldown
+        ):
+            self._state = BreakerState.HALF_OPEN
+            self._half_open_in_flight = False
         return self._state
 
     @property

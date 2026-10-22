@@ -49,6 +49,9 @@ CORRELATION_HEADER = "X-Correlation-Id"
 IDEMPOTENCY_HEADER = "Idempotency-Key"
 REPLAYED_HEADER = "Idempotency-Replayed"
 
+# Any 4xx or 5xx is a problem document rather than a result.
+HTTP_ERROR_FLOOR = 400
+
 
 @dataclass(frozen=True, slots=True)
 class ToolResult:
@@ -264,7 +267,7 @@ class ToolInvoker:
                 )
             ) from error
 
-        if response.status_code >= 400:
+        if response.status_code >= HTTP_ERROR_FLOOR:
             problem = _problem_body(response)
             raise ToolError(
                 classify(

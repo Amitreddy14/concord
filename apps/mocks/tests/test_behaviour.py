@@ -35,7 +35,9 @@ class TestRefundsTargetCaptures:
         # The S02 shape: one authorization, two captures, one gateway
         # reference. Refunding the duplicate must not touch the original.
         seed(payments, scenarios["S02"])
-        response = payments.post("/refunds", json=refund_body("cap_8842A2", 245000), headers=key("a"))
+        response = payments.post(
+            "/refunds", json=refund_body("cap_8842A2", 245000), headers=key("a")
+        )
         assert response.status_code == 201
 
         original = payments.get("/captures/cap_8842A1").json()
@@ -67,7 +69,9 @@ class TestRefundsTargetCaptures:
         self, payments: TestClient, scenarios: dict[str, Scenario]
     ) -> None:
         seed(payments, scenarios["S03"])
-        payments.post("/refunds", json=refund_body("cap_9120B1", 50000, "buyer_request"), headers=key("d"))
+        payments.post(
+            "/refunds", json=refund_body("cap_9120B1", 50000, "buyer_request"), headers=key("d")
+        )
         response = payments.post(
             "/refunds", json=refund_body("cap_9120B1", 50000, "buyer_request"), headers=key("e")
         )
@@ -225,22 +229,22 @@ class TestKnowledge:
         # S07 cites an incident only if it is active. A closed one must not be
         # offered as the explanation for a delay that is still happening.
         seed(knowledge, scenarios["S07"])
-        active = knowledge.get(
-            "/incidents/active", params={"tenantId": "acme-payments"}
-        ).json()["incidents"]
+        active = knowledge.get("/incidents/active", params={"tenantId": "acme-payments"}).json()[
+            "incidents"
+        ]
         assert [i["incident_id"] for i in active] == ["inc_2208"]
 
         knowledge.app.state.store.incidents["inc_2208"]["status"] = "resolved"
-        after = knowledge.get(
-            "/incidents/active", params={"tenantId": "acme-payments"}
-        ).json()["incidents"]
+        after = knowledge.get("/incidents/active", params={"tenantId": "acme-payments"}).json()[
+            "incidents"
+        ]
         assert after == []
 
     def test_an_incident_without_a_committed_date_does_not_acquire_one(
         self, knowledge: TestClient, scenarios: dict[str, Scenario]
     ) -> None:
         seed(knowledge, scenarios["S07"])
-        incident = knowledge.get(
-            "/incidents/active", params={"tenantId": "acme-payments"}
-        ).json()["incidents"][0]
+        incident = knowledge.get("/incidents/active", params={"tenantId": "acme-payments"}).json()[
+            "incidents"
+        ][0]
         assert incident["expected_resolution_at"] is None

@@ -12,7 +12,7 @@ invoker still goes through real request building, headers and status codes.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -117,7 +117,10 @@ async def invoker(
     clock: FrozenClock,
     sleeper: RecordingSleep,
 ) -> AsyncIterator[ToolInvoker]:
-    apps = {httpx.URL(url).host: app for url, app in zip(BASE_URLS.values(), services.values())}
+    apps = {
+        httpx.URL(url).host: app
+        for url, app in zip(BASE_URLS.values(), services.values(), strict=False)
+    }
     transport = RoutingTransport(apps)
     async with httpx.AsyncClient(transport=transport) as client:
         yield ToolInvoker(
@@ -125,7 +128,9 @@ async def invoker(
             base_urls=dict(BASE_URLS),
             client=client,
             ledger=InMemoryLedger(),
-            breakers=BreakerRegistry(failure_threshold=3, cooldown=timedelta(seconds=30), clock=clock),
+            breakers=BreakerRegistry(
+                failure_threshold=3, cooldown=timedelta(seconds=30), clock=clock
+            ),
             sleep=sleeper,
         )
 

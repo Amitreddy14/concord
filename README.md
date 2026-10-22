@@ -107,7 +107,7 @@ infra/          Compose stack, migrations, local bootstrap
 
 ## Status
 
-Phase 2 complete. Phase 3 next. See [docs/roadmap.md](docs/roadmap.md) for the full plan and
+Phase 3 complete. Phase 4 next. See [docs/roadmap.md](docs/roadmap.md) for the full plan and
 the definition of done for each phase.
 
 | Phase | Title | State |
@@ -115,8 +115,8 @@ the definition of done for each phase.
 | 0 | Foundations: contracts, domain model, scenarios | complete |
 | 1 | Mock enterprise systems with fault injection | complete |
 | 2 | Tool layer | complete |
-| 3 | Vertical slice | next |
-| 4 | Knowledge grounding | not started |
+| 3 | Vertical slice | complete |
+| 4 | Knowledge grounding | next |
 | 5 | Multi-agent graph | not started |
 | 6 | Policy, risk tiering, human approval | not started |
 | 7 | Failure engineering | not started |
@@ -132,7 +132,26 @@ Requirements: Docker, Python 3.12+, Node 20+, and Ollama running on the host.
 ```bash
 cp .env.example .env
 make bootstrap      # pull models, start infrastructure, run migrations
-make check          # lint, type-check, validate contracts
+make doctor         # verify local inference and measure decode throughput
+make check          # lint, types, contracts, money rule, tests
+```
+
+Submit a ticket and watch it resolve:
+
+```bash
+make up                                   # mock systems of record
+SCENARIO=S01 make seed                    # load a scenario's state
+uvicorn apps.api.main:app --port 8000 &   # the intake API
+
+curl -s localhost:8000/tickets -H 'content-type: application/json' -d '{
+  "merchant_id": "M-1001", "channel": "email",
+  "subject": "Refund timing question",
+  "body": "How long do refunds take to reach the customer'"'"'s account?"
+}'
+# -> {"run_id": "run_000001", ...}
+
+curl -N localhost:8000/runs/run_000001/stream   # progress, as it happens
+curl -s localhost:8000/runs/run_000001/steps    # the ledger for that run
 ```
 
 Local inference is expected on the host rather than in a container so the GPU is reachable

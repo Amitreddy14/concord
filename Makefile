@@ -62,7 +62,7 @@ seed: require-python ## Load the scenario fixture dataset into the mock systems
 	$(PY) -m apps.mocks.seed --scenario $${SCENARIO:-S02}
 
 .PHONY: check
-check: lint types contracts yaml money test ## Everything CI runs
+check: lint types contracts yaml money deps test ## Everything CI runs
 
 .PHONY: lint
 lint: require-python ## Lint and format check
@@ -89,6 +89,10 @@ hooks: ## Point git at the repository's tracked hooks
 .PHONY: money
 money: require-python ## Enforce the no-floats-near-money rule
 	$(PY) -m scripts.check_money
+
+.PHONY: deps
+deps: require-python ## Every third-party import must be a declared dependency
+	$(PY) -m scripts.check_deps
 
 .PHONY: test
 test: require-python ## Unit and integration tests

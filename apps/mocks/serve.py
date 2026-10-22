@@ -43,7 +43,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run one mock system of record")
     parser.add_argument("service", choices=sorted(SERVICES))
     parser.add_argument("--port", type=int, default=None)
-    parser.add_argument("--host", default="0.0.0.0")  # noqa: S104 - container-local
+    parser.add_argument("--host", default="0.0.0.0")
     args = parser.parse_args(argv)
 
     port = args.port or SERVICES[args.service][2]
