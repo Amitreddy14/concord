@@ -117,6 +117,18 @@ class AgentState(TypedDict, total=False):
     proposal: dict[str, Any]
     verification: dict[str, Any]
 
+    # Phase 6: the decision, the human's answer, and what was done.
+    target_capture: dict[str, Any]
+    """The capture the proposal is against, snapshotted at propose time. Held
+    so the policy engine evaluates the window and the remainder against the
+    same facts the reviewer was shown, rather than a re-read that may have
+    moved while the approval sat in a queue."""
+    decision: dict[str, Any]
+    approval: dict[str, Any]
+    refund: dict[str, Any]
+    refund_replayed: bool
+    proposal_note: str
+
     # Control
     status: Literal["running", "awaiting_approval", "awaiting_customer", "completed", "failed"]
     failure: str | None
