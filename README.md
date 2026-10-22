@@ -107,7 +107,7 @@ infra/          Compose stack, migrations, local bootstrap
 
 ## Status
 
-Phase 4 complete. Phase 5 next. See [docs/roadmap.md](docs/roadmap.md) for the full plan and
+Phase 5 complete. Phase 6 next. See [docs/roadmap.md](docs/roadmap.md) for the full plan and
 the definition of done for each phase.
 
 | Phase | Title | State |
@@ -117,8 +117,8 @@ the definition of done for each phase.
 | 2 | Tool layer | complete |
 | 3 | Vertical slice | complete |
 | 4 | Knowledge grounding | complete |
-| 5 | Multi-agent graph | next |
-| 6 | Policy, risk tiering, human approval | not started |
+| 5 | Multi-agent graph | complete |
+| 6 | Policy, risk tiering, human approval | next |
 | 7 | Failure engineering | not started |
 | 8 | Evaluation and observability | not started |
 | 9 | Tenant onboarding and deployment | not started |

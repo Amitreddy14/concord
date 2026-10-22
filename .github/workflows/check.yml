@@ -47,6 +47,29 @@ jobs:
     name: unit and integration tests
     runs-on: ubuntu-latest
     timeout-minutes: 10
+
+    # A real Postgres, because the durable checkpointer is the whole reason
+    # LangGraph was chosen (ADR 0001) and durability cannot be tested against
+    # an in-memory saver — that test would pass while the property it claims
+    # to verify was absent.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: concord
+          POSTGRES_PASSWORD: concord
+          POSTGRES_DB: concord_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U concord"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      TEST_DATABASE_URL: postgresql://concord:concord@localhost:5432/concord_test
+
     steps:
       - name: Check out the repository
         uses: actions/checkout@v4
@@ -78,6 +101,17 @@ jobs:
 
       - name: Run the test suite
         run: make test
+
+      # A skipped test is not a passing test. The durable path is the one
+      # most likely to rot unnoticed, so CI asserts it actually ran.
+      - name: Confirm the durable checkpointer tests were not skipped
+        run: |
+          make test PYTEST_ARGS="packages/agent/tests/test_checkpointing.py -q -rs" \
+            | tee /tmp/checkpoint.log
+          if grep -q "SKIPPED" /tmp/checkpoint.log; then
+            echo "::error::checkpointer tests skipped; TEST_DATABASE_URL is not reaching them"
+            exit 1
+          fi
 
   repo-hygiene:
     name: repository hygiene

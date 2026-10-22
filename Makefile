@@ -96,7 +96,7 @@ deps: require-python ## Every third-party import must be a declared dependency
 
 .PHONY: test
 test: require-python ## Unit and integration tests
-	$(PY) -m pytest
+	$(PY) -m pytest $(PYTEST_ARGS)
 
 .PHONY: eval
 eval: require-python ## Run the golden scenario suite

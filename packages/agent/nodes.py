@@ -16,35 +16,38 @@ Every node follows the same shape:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any
 
 from packages.agent import grounding, prompts
+from packages.agent.context import NodeContext
+from packages.agent.specialists import specialist_facts
 from packages.agent.state import AgentState, DraftResult, TriageResult
 from packages.agent.structured import generate_structured
-from packages.shared.llm import LLMGateway
-from packages.tools.invoker import ToolInvoker
 
 # Per-node context budgets, enforced by the gateway. Deliberately tight: on an
 # 8GB card the resident model's context is the scarce resource, and a node
 # that quietly grows its prompt degrades every other node's latency.
+# Re-exported so callers keep importing NodeContext from the module they
+# already use.
+__all__ = [
+    "BUDGETS",
+    "NodeContext",
+    "draft",
+    "gather",
+    "retrieve",
+    "triage",
+    "verify_grounding",
+]
+
 BUDGETS = {
     "triage": 1536,
     "gather": 1024,
     "retrieve": 1024,
-    "draft": 3072,
+    # Larger than the others because it is the only node that sees both the
+    # specialist's facts and the retrieved passages. Still bounded: a drafter
+    # given everything produces a reply that cites loosely.
+    "draft": 4096,
 }
-
-
-@dataclass
-class NodeContext:
-    """What every node needs. Passed once rather than threaded through state."""
-
-    gateway: LLMGateway
-    invoker: ToolInvoker
-    tenant_id: str
-    require_citations: bool = True
-    min_passage_score: float | None = None
 
 
 TRIAGE_INSTRUCTION = """\
@@ -154,6 +157,7 @@ async def draft(state: AgentState, context: NodeContext) -> dict[str, Any]:
         [
             f"merchant: {merchant.get('display_name', 'unknown')}",
             f"tier: {merchant.get('tier', 'unknown')}",
+            *([specialist_facts(state)] if specialist_facts(state) else []),
             "",
             "[supporting passages]",
             *(f"{p['passage_id']}: {p.get('title', '')} — {p.get('text', '')}" for p in passages),

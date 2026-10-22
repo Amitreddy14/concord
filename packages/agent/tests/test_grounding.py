@@ -13,6 +13,7 @@ from typing import Any
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from langgraph.checkpoint.memory import MemorySaver
 
 from apps.mocks.faults import FaultConfig, FaultProfile
 from apps.mocks.serve import build
@@ -145,7 +146,7 @@ async def run_scenario(
             require_citations=tenant.requires_citations,
             min_passage_score=tenant.grounding.get("min_passage_score"),
         )
-        graph = build_graph(context)
+        graph = build_graph(context, MemorySaver())
         state = initial_state(
             run_id=f"run_{scenario.scenario_id}",
             ticket_id=f"tkt_{scenario.scenario_id}",
@@ -255,7 +256,7 @@ class TestRefusalPath:
             body="Can you recommend a good restaurant near our office?",
             merchant_id="M-1001",
         )
-        assert final["visited"] == ["triage", "gather", "retrieve", "verify"]
+        assert final["visited"] == ["triage", "gather", "knowledge_only", "retrieve", "verify"]
         assert "draft" not in final["visited"]
         assert final["grounding"]["verdict"] == "unsupported"
         assert final["reply"]["is_refusal"] is True
