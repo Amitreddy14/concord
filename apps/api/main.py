@@ -119,6 +119,8 @@ async def execute(run: Run, deps: Dependencies, submission: SubmitTicket) -> Non
 
     run.result = {
         "intent": (final.get("triage") or {}).get("intent"),
+        "reply": final.get("reply"),
+        "grounding": final.get("grounding"),
         "draft": final.get("draft"),
         "passages": [p.get("passage_id") for p in final.get("passages") or []],
         "visited": final.get("visited", []),

@@ -98,6 +98,8 @@ class AgentState(TypedDict, total=False):
     triage: dict[str, Any]
     passages: list[dict[str, Any]]
     draft: dict[str, Any]
+    grounding: dict[str, Any]
+    reply: dict[str, Any]
 
     # Control
     status: Literal["running", "awaiting_approval", "completed", "failed"]

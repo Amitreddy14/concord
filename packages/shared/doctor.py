@@ -51,7 +51,12 @@ class Finding:
 
 
 def gpu_memory() -> Finding:
-    """VRAM in use, from nvidia-smi if it is present."""
+    """VRAM in use, from nvidia-smi if it is present.
+
+    Call this only once the model is resident. Before that it reports idle
+    memory, which says nothing about the headroom the context length has to
+    fit into.
+    """
     if shutil.which("nvidia-smi") is None:
         return Finding("gpu", "no nvidia-smi on PATH", ok=True, note="inference may be on CPU")
     try:
@@ -136,7 +141,7 @@ async def run() -> int:
     model = os.environ.get("LLM_MODEL_PRIMARY", "qwen3:8b")
 
     print(f"concord doctor — {base_url}, model {model}\n")
-    findings: list[Finding] = [gpu_memory()]
+    findings: list[Finding] = []
 
     async with httpx.AsyncClient() as client:
         gateway = OllamaGateway(base_url=base_url, model=model, client=client)
@@ -168,6 +173,12 @@ async def run() -> int:
 
         warmup, rate = await measure(gateway)
         findings.extend([warmup, rate])
+
+        # Read VRAM *after* the model is resident. Reading it first reported
+        # the idle figure — "8188 MiB free" on an 8GB card — which is not
+        # headroom, is not what the check claims to measure, and would have
+        # looked fine right up until a context length was sized against it.
+        findings.append(gpu_memory())
 
     for finding in findings:
         print(finding.render())

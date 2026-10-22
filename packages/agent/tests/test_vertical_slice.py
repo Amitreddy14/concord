@@ -32,7 +32,7 @@ class TestScenario01:
             initial_state(**S01), config={"configurable": {"thread_id": "tkt_s01"}}
         )
 
-        assert final["visited"] == ["triage", "gather", "retrieve", "draft"]
+        assert final["visited"] == ["triage", "gather", "retrieve", "draft", "verify"]
         assert final["triage"]["intent"] == "status_question"
         assert final["merchant"]["merchant_id"] == "M-1001"
 
@@ -86,8 +86,8 @@ class TestSurvivingAnEvictedModel:
         graph = build_graph(context)
         final = await _invoke_with_retry(graph, initial_state(**S01), "t5")
 
-        assert final["visited"] == ["triage", "gather", "retrieve", "draft"]
-        assert final["draft"]["citations"] == ["psg_refund-policy.v3.s2"]
+        assert final["visited"] == ["triage", "gather", "retrieve", "draft", "verify"]
+        assert final["draft"]["citations"] == ["psg_refund-policy.v3.credit-timelines"]
 
     async def test_the_failure_is_classified_retryable(self, gateway: ScriptedGateway) -> None:
         gateway.fail_times = 1

@@ -107,6 +107,16 @@ contracts, the money rule and the suite all run in CI.
 **Done when** S01, S05, S07 and S08 produce cited replies, and a question with no supporting
 passage yields a refusal rather than a fluent guess.
 
+**Verified.** 204 tests. The four scenarios cite the real corpus by its real ids — the fixtures
+no longer seed their own passages, so they exercise retrieval rather than standing in for it. An
+unsupported question skips the draft node entirely and refuses. A fabricated citation is caught
+end to end.
+
+Three defects found while building it, each of which would have made the refusal path useless: a
+dense retriever ranking every passage so nothing ever came back empty; a score normalised
+against both retrievers even when only one contributed; and the word "merchant" being enough to
+match a payments corpus.
+
 ---
 
 ## Phase 5 — Multi-agent graph

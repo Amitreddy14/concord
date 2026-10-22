@@ -107,7 +107,7 @@ infra/          Compose stack, migrations, local bootstrap
 
 ## Status
 
-Phase 3 complete. Phase 4 next. See [docs/roadmap.md](docs/roadmap.md) for the full plan and
+Phase 4 complete. Phase 5 next. See [docs/roadmap.md](docs/roadmap.md) for the full plan and
 the definition of done for each phase.
 
 | Phase | Title | State |
@@ -116,8 +116,8 @@ the definition of done for each phase.
 | 1 | Mock enterprise systems with fault injection | complete |
 | 2 | Tool layer | complete |
 | 3 | Vertical slice | complete |
-| 4 | Knowledge grounding | next |
-| 5 | Multi-agent graph | not started |
+| 4 | Knowledge grounding | complete |
+| 5 | Multi-agent graph | next |
 | 6 | Policy, risk tiering, human approval | not started |
 | 7 | Failure engineering | not started |
 | 8 | Evaluation and observability | not started |

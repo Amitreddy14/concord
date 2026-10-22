@@ -42,7 +42,7 @@ S01_DRAFT = json.dumps(
             "Card refunds reach the cardholder's statement in 5 to 7 working days. "
             "UPI and wallet refunds are usually credited within 3 working days."
         ),
-        "citations": ["psg_refund-policy.v3.s2"],
+        "citations": ["psg_refund-policy.v3.credit-timelines"],
         "unsupported_claims": [],
     }
 )
@@ -61,6 +61,12 @@ def tenant() -> TenantConfig:
 
 @pytest.fixture
 def services(scenarios: dict[str, Scenario]) -> dict[str, Any]:
+    """Services seeded from S01.
+
+    S01 no longer seeds knowledge passages, so the knowledge service serves
+    the tenant's real corpus through the hybrid index — which is the point:
+    these tests exercise retrieval rather than a fixture standing in for it.
+    """
     from fastapi.testclient import TestClient
 
     apps = {n: build(n, FaultConfig(profile=FaultProfile.OFF)) for n in BASE_URLS}

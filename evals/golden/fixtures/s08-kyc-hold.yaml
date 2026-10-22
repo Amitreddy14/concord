@@ -28,21 +28,9 @@ seed:
         settled_at: null
         utr: null
         hold_reason: kyc_review
-  knowledge:
-    passages:
-      - passage_id: psg_kyc-guide.v2.s4
-        document_id: kyc-guide
-        doc_type: help_centre
-        title: Resolving a verification hold
-        section: "4. What to do next"
-        text: >-
-          When payouts are held for verification, re-upload the business
-          registration certificate and a current bank statement from the
-          dashboard under Settings, Verification. A reviewer responds within two
-          working days of a fresh submission. Payouts resume automatically once
-          verification completes; no separate request is needed.
-        version: v2
-        effective_from: 2026-05-01
+  # Passages come from the tenant's configured corpus rather than being
+  # seeded here. Seeding them bypassed the retrieval this scenario exists to
+  # exercise, and left two copies of the policy text to drift apart.
 
 ticket:
   merchant_id: M-1031
@@ -72,5 +60,5 @@ must:
     value: compliance
 
 should:
-  - reply_states_concrete_next_step_from_corpus: psg_kyc-guide.v2.s4
+  - reply_states_concrete_next_step_from_corpus: psg_kyc-guide.v2.what-to-do-next
   - reply_avoids_promising_a_review_outcome: true

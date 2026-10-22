@@ -182,6 +182,8 @@ def create_app(
     app.state.store = store
     app.state.injector = injector
     app.state.idempotency = IdempotencyStore()
+    # Per-tenant retrieval indexes, built lazily and kept for the process.
+    app.state.indexes = {}
 
     @app.exception_handler(ProblemError)
     async def _problem_handler(_request: Request, exc: ProblemError) -> JSONResponse:

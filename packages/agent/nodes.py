@@ -19,7 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from packages.agent import prompts
+from packages.agent import grounding, prompts
 from packages.agent.state import AgentState, DraftResult, TriageResult
 from packages.agent.structured import generate_structured
 from packages.shared.llm import LLMGateway
@@ -43,6 +43,8 @@ class NodeContext:
     gateway: LLMGateway
     invoker: ToolInvoker
     tenant_id: str
+    require_citations: bool = True
+    min_passage_score: float | None = None
 
 
 TRIAGE_INSTRUCTION = """\
@@ -108,9 +110,17 @@ async def retrieve(state: AgentState, context: NodeContext) -> dict[str, Any]:
     triage_result = state.get("triage") or {}
     query = triage_result.get("summary") or state.get("subject", "")
 
+    arguments: dict[str, Any] = {
+        "query": query,
+        "tenant_id": context.tenant_id,
+        "top_k": 4,
+    }
+    if context.min_passage_score is not None:
+        arguments["min_score"] = context.min_passage_score
+
     result = await context.invoker.call(
         "search_knowledge",
-        {"query": query, "tenant_id": context.tenant_id, "top_k": 4},
+        arguments,
         run_id=state["run_id"],
         node="retrieve",
     )
@@ -167,3 +177,44 @@ async def draft(state: AgentState, context: NodeContext) -> dict[str, Any]:
         max_tokens=800,
     )
     return {"draft": result.value.model_dump(), "visited": ["draft"]}
+
+
+async def verify_grounding(state: AgentState, context: NodeContext) -> dict[str, Any]:
+    """Decide whether the draft may be sent.
+
+    Structural checks only — see ``grounding.verify``. A node that asked the
+    model whether its own output was grounded would be asking the source of
+    the problem to certify the solution.
+
+    The node always produces a reply: either the draft, or a refusal. A graph
+    that can end with no reply at all leaves a merchant waiting, which is a
+    worse outcome than being told a person is picking it up.
+    """
+    draft_result = state.get("draft") or {}
+    passages = state.get("passages") or []
+
+    result = grounding.verify(
+        draft=draft_result,
+        retrieved=passages,
+        require_citations=context.require_citations,
+    )
+
+    if result.may_send:
+        reply = {
+            "text": draft_result.get("reply", ""),
+            "citations": result.citations,
+            "is_refusal": False,
+        }
+    else:
+        reply = {
+            "text": grounding.refusal_reply(result),
+            "citations": [],
+            "is_refusal": True,
+            "reason": result.problems[0] if result.problems else str(result.verdict),
+        }
+
+    return {
+        "grounding": result.to_payload(),
+        "reply": reply,
+        "visited": ["verify"],
+    }
