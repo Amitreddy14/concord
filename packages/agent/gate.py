@@ -41,7 +41,8 @@ from packages.policy.approval import (
     build_request,
     fingerprint,
 )
-from packages.policy.engine import Permission, ProposedAction, evaluate
+from packages.policy.engine import Decision, Permission, ProposedAction, evaluate
+from packages.shared.ledger import RunStep, StepKind, StepOutcome
 from packages.shared.money import Money
 
 __all__ = ["act", "await_approval", "decide", "propose"]
@@ -189,6 +190,13 @@ async def decide(state: AgentState, context: NodeContext) -> dict[str, Any]:
         capture=state.get("target_capture"),
         now=datetime.now(UTC),
     )
+    # The decision goes in the ledger, not only into state. S05 asks for a
+    # recorded policy-decision step carrying the rule id and the inputs it
+    # was evaluated against, and the reason is the same one the rule ids
+    # exist for: a decision a reviewer cannot find afterwards is a decision
+    # they have to take on trust.
+    _record_decision(context, state, decision)
+
     return {
         "decision": decision.to_payload(),
         "status": (
@@ -198,6 +206,62 @@ async def decide(state: AgentState, context: NodeContext) -> dict[str, Any]:
         ),
         "visited": ["decide"],
     }
+
+
+#: How a permission lands in the ledger. A refusal is not an error — the
+#: engine worked — so `refused` and `forbidden` are recorded as refusals
+#: rather than as failures, and a trace is not red where the system behaved.
+OUTCOME_FOR_PERMISSION = {
+    Permission.PERMITTED: StepOutcome.SUCCESS,
+    Permission.NEEDS_APPROVAL: StepOutcome.SUCCESS,
+    Permission.FORBIDDEN: StepOutcome.REFUSED,
+    Permission.REFUSED: StepOutcome.REFUSED,
+}
+
+
+def _record_decision(context: NodeContext, state: AgentState, decision: Decision) -> None:
+    ledger = context.invoker.ledger
+    run_id = str(state["run_id"])
+    now = datetime.now(UTC)
+    ledger.append(
+        RunStep(
+            run_id=run_id,
+            seq=ledger.next_seq(run_id),
+            node="decide",
+            kind=StepKind.POLICY_DECISION,
+            outcome=OUTCOME_FOR_PERMISSION[decision.permission],
+            started_at=now,
+            ended_at=now,
+            policy_rule_id=decision.rule_id,
+            detail=str(decision.permission),
+        ),
+        # The inputs are a payload rather than columns: which facts a decision
+        # turned on depends on which rule fired, and a schema that pinned them
+        # would need changing every time the engine records one more.
+        payloads={"request": decision.inputs, "response": decision.to_payload()},
+    )
+
+
+def _record_approval(
+    context: NodeContext, state: AgentState, request: approvals.ApprovalRequest
+) -> None:
+    ledger = context.invoker.ledger
+    run_id = str(state["run_id"])
+    now = datetime.now(UTC)
+    ledger.append(
+        RunStep(
+            run_id=run_id,
+            seq=ledger.next_seq(run_id),
+            node="await_approval",
+            kind=StepKind.APPROVAL,
+            outcome=(StepOutcome.SUCCESS if request.status in PROCEEDING else StepOutcome.REFUSED),
+            started_at=now,
+            ended_at=now,
+            policy_rule_id=request.decision.get("rule_id"),
+            detail=f"{request.status} by {request.reviewer or 'nobody'}",
+        ),
+        payloads={"response": request.to_review_payload()},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -222,6 +286,7 @@ async def await_approval(state: AgentState, context: NodeContext) -> dict[str, A
     # On re-execution after the resume, the row already exists and carries the
     # reviewer's answer. Reading it first is what lets this node tell "nobody
     # has been asked yet" from "the answer is already in".
+    evidence = _evidence_for_reviewer(state)
     existing = context.approvals.find_for_proposal(run_id=run_id, fingerprint=proposal_print)
     request = existing or context.approvals.upsert(
         build_request(
@@ -232,6 +297,7 @@ async def await_approval(state: AgentState, context: NodeContext) -> dict[str, A
             merchant_id=str(state.get("merchant_id", "")),
             decision=decision,
             proposal=proposal,
+            evidence=evidence,
             expires_after_hours=int(context.tenant.approvals.get("expires_after_hours", 48)),
         )
     )
@@ -246,7 +312,7 @@ async def await_approval(state: AgentState, context: NodeContext) -> dict[str, A
                 "expires_at": request.expires_at.isoformat(),
                 "decision": decision,
                 "proposal": proposal,
-                "evidence": _evidence_for_reviewer(state),
+                "evidence": evidence,
             }
         )
         # The resume value is advisory. The store is authoritative, because an
@@ -258,6 +324,7 @@ async def await_approval(state: AgentState, context: NodeContext) -> dict[str, A
             else context.approvals.get(request.approval_id)
         ) or request
 
+    _record_approval(context, state, request)
     return _approval_outcome(request)
 
 

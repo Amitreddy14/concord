@@ -467,3 +467,29 @@ class TestS08Forbidden:
         snapshot = await rig.graph.aget_state(config)
 
         assert snapshot.values["decision"]["inputs"]["merchant_tier"] == "standard"
+
+
+@pytest.mark.parametrize("rig", ["S04"], indirect=True)
+class TestStoredEvidence:
+    async def test_the_record_keeps_the_evidence_the_reviewer_was_shown(self, rig: Rig) -> None:
+        # The interrupt payload carries the evidence, but it is gone once the
+        # process restarts. The console renders the record, so the record has
+        # to hold it — snapshotted, not re-read, or a reviewer opening this
+        # next week sees facts that have moved since the rule fired.
+        async for _ in rig.graph.astream(rig.state(), config=rig.config()):
+            pass
+
+        row = rig.approvals.pending()[0]
+        assert row.evidence["captures"], "the record must carry the captures"
+        assert row.evidence["payment_id"] == "pay_7731C"
+
+    async def test_the_stored_evidence_carries_no_merchant_text(self, rig: Rig) -> None:
+        # ADR 0005 rule 4, asserted where it now persists: a stored evidence
+        # blob is a longer-lived place for an injected instruction to sit
+        # than an interrupt payload.
+        async for _ in rig.graph.astream(rig.state(), config=rig.config()):
+            pass
+
+        row = rig.approvals.pending()[0]
+        body = rig.scenario.ticket["body"]
+        assert body not in json.dumps(row.to_review_payload())
