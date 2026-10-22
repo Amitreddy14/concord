@@ -101,8 +101,24 @@ class AgentState(TypedDict, total=False):
     grounding: dict[str, Any]
     reply: dict[str, Any]
 
+    # Specialist findings. Each is written by exactly one specialist, so a
+    # key being present says which path the run took as surely as `visited`.
+    resolution: dict[str, Any]
+    payment: dict[str, Any]
+    captures: list[dict[str, Any]]
+    duplicate_captures: list[str]
+    settlements: list[dict[str, Any]]
+    incidents: list[dict[str, Any]]
+    evidence_packet: dict[str, Any]
+    contact_history: list[dict[str, Any]]
+    repeat_contact: bool
+
+    # Proposal and its verification
+    proposal: dict[str, Any]
+    verification: dict[str, Any]
+
     # Control
-    status: Literal["running", "awaiting_approval", "completed", "failed"]
+    status: Literal["running", "awaiting_approval", "awaiting_customer", "completed", "failed"]
     failure: str | None
 
     # Append-only trace of which nodes ran, for the console and for debugging

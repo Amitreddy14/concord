@@ -1,13 +1,17 @@
-"""The LangGraph StateGraph for the vertical slice.
+"""The agent graph.
 
-Linear for now — triage, gather, retrieve, draft — with the supervisor and
-specialist subgraphs arriving in phase 5. Built as a graph from the start
-rather than as a function chain because the properties that matter later are
-structural: a durable checkpoint per step, and a pause point that survives a
-restart (ADR 0001). Retrofitting those onto a chain is a rewrite.
+Triage classifies, a supervisor routes to one specialist, retrieval grounds,
+the drafter writes, and the verifier decides whether the reply may be sent.
 
-The checkpointer is in-memory here. Phase 5 swaps in Postgres behind the same
-interface, which is the whole reason the interface is used now.
+The supervisor is a conditional edge rather than a node that calls a model.
+Intent was classified by triage; routing is a lookup. Asking a model to decide
+twice adds latency and a second opportunity to be wrong.
+
+Two branches end the run early, and both are successful outcomes rather than
+failures. An ambiguous payment reference terminates in a question, because a
+silent choice between two payments is the defect S11 exists to catch. An empty
+retrieval skips drafting, because a reply written against nothing is the most
+expensive thing this system could produce.
 """
 
 from __future__ import annotations
@@ -15,21 +19,23 @@ from __future__ import annotations
 from collections.abc import Callable, Coroutine
 from typing import Any
 
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 
-from packages.agent import nodes
+from packages.agent import nodes, specialists
+from packages.agent.checkpointing import checkpointer as checkpointer_context
 from packages.agent.state import AgentState
 
 NodeFn = Callable[[AgentState], Coroutine[Any, Any, dict[str, Any]]]
 
+__all__ = ["build_graph", "checkpointer_context", "initial_state"]
+
 
 def build_graph(context: nodes.NodeContext, checkpointer: Any | None = None) -> Any:
-    """Compile the slice.
+    """Compile the graph.
 
     Nodes are bound to their context here rather than reading a global, so a
-    test can supply a scripted gateway and an invoker pointed at in-process
-    services without patching anything.
+    test can supply a scripted gateway and an in-process invoker without
+    patching anything.
     """
     builder: StateGraph[AgentState] = StateGraph(AgentState)
 
@@ -40,36 +46,48 @@ def build_graph(context: nodes.NodeContext, checkpointer: Any | None = None) -> 
         wrapped.__name__ = fn.__name__
         return wrapped
 
-    # mypy cannot match a plain async callable over a TypedDict against
-    # add_node's overload set, though the call is correct at runtime. Narrowed
-    # to this one call rather than relaxing the type check for the module.
-    for name, fn in (
+    core = (
         ("triage", nodes.triage),
         ("gather", nodes.gather),
         ("retrieve", nodes.retrieve),
         ("draft", nodes.draft),
         ("verify", nodes.verify_grounding),
-    ):
+    )
+    for name, fn in core:
+        builder.add_node(name, bind(fn))  # type: ignore[call-overload]
+    for name, fn in specialists.SPECIALISTS.items():
         builder.add_node(name, bind(fn))  # type: ignore[call-overload]
 
     builder.add_edge(START, "triage")
     builder.add_edge("triage", "gather")
-    builder.add_edge("gather", "retrieve")
 
-    # Retrieval returning nothing is an answer, not a failure: the corpus does
-    # not cover the question. Drafting anyway would produce a fluent reply
-    # with nothing behind it, which is the single most expensive thing this
-    # system could do. The edge skips to the verifier, which turns the empty
-    # result into a refusal.
+    # The supervisor: one hop, from classified intent to the specialist that
+    # reads what that intent needs and nothing else.
     builder.add_conditional_edges(
-        "retrieve",
-        _has_passages,
-        {"draft": "draft", "verify": "verify"},
+        "gather",
+        specialists.route,
+        {name: name for name in specialists.SPECIALISTS},
     )
+
+    # A specialist that resolved a question — an ambiguous reference, a
+    # payment that does not exist — has finished the run.
+    for name in specialists.SPECIALISTS:
+        builder.add_conditional_edges(
+            name,
+            _specialist_next,
+            {"retrieve": "retrieve", "end": END},
+        )
+
+    builder.add_conditional_edges("retrieve", _has_passages, {"draft": "draft", "verify": "verify"})
     builder.add_edge("draft", "verify")
     builder.add_edge("verify", END)
 
-    return builder.compile(checkpointer=checkpointer or MemorySaver())
+    return builder.compile(checkpointer=checkpointer)
+
+
+def _specialist_next(state: AgentState) -> str:
+    """Stop if the specialist already produced the run's reply."""
+    return "end" if state.get("reply") else "retrieve"
 
 
 def _has_passages(state: AgentState) -> str:
