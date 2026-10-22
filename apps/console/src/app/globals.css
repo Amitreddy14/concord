@@ -1,0 +1,618 @@
+/*
+ * The console's tokens.
+ *
+ * The palette is keyed to risk, because risk tier is the organising fact of
+ * every screen here: a reviewer scanning a queue is sorting by whose
+ * authority a thing needs. So colour carries that and nothing else — there
+ * is no decorative accent anywhere in this file.
+ *
+ * The values are print-like on purpose. This is a tool for deciding whether
+ * money moves, and the register that suits it is a settlement report rather
+ * than a dashboard: ledger stock, oxide inks, hairlines.
+ */
+
+:root {
+  --font-sans: 'IBM Plex Sans Variable', 'IBM Plex Sans';
+  --font-mono: 'IBM Plex Mono';
+
+  --paper: #f7f7f4;
+  --paper-raised: #fffffe;
+  --ink: #16171b;
+  --ink-soft: #5c5f66;
+  --ink-faint: #8a8d94;
+  --rule: #d8d9d2;
+  --rule-strong: #b9bbb3;
+
+  /* Risk, not decoration. */
+  --authority: #1f4e8c; /* needs a human */
+  --autonomous: #2c6e52; /* within the agent's autonomy */
+  --stop: #8c2f23; /* forbidden, or refused by the rules */
+  --expiring: #a8641b; /* running out of time */
+
+  --authority-wash: #eaf0f8;
+  --stop-wash: #f8ecea;
+  --expiring-wash: #faf2e8;
+
+  /* A modular scale, 1.22, with 15px body for a dense console. */
+  --t-xs: 0.733rem;
+  --t-sm: 0.8125rem;
+  --t-base: 0.9375rem;
+  --t-md: 1.125rem;
+  --t-lg: 1.375rem;
+  --t-xl: 1.75rem;
+  --t-2xl: 2.25rem;
+
+  --gap-1: 0.25rem;
+  --gap-2: 0.5rem;
+  --gap-3: 0.75rem;
+  --gap-4: 1rem;
+  --gap-5: 1.5rem;
+  --gap-6: 2.25rem;
+  --gap-7: 3.5rem;
+
+  --radius: 3px;
+  --measure: 68ch;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --paper: #15161a;
+    --paper-raised: #1b1d22;
+    --ink: #ecede9;
+    --ink-soft: #a0a3aa;
+    --ink-faint: #71747b;
+    --rule: #2b2d34;
+    --rule-strong: #3d4048;
+
+    --authority: #7aa7dd;
+    --autonomous: #6fb591;
+    --stop: #d98b7f;
+    --expiring: #d8a460;
+
+    --authority-wash: #1a2330;
+    --stop-wash: #2c1f1d;
+    --expiring-wash: #2a2318;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  font-size: var(--t-base);
+  line-height: 1.55;
+  font-feature-settings: 'cv05' 1;
+}
+
+/*
+ * Figures and identifiers are monospace because they are machine identity:
+ * a capture id gets copied into another system, and a column of amounts has
+ * to be scannable down the decimal point. Prose is never monospace here.
+ */
+.mono,
+code {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'zero' 1;
+}
+
+.amount {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'zero' 1;
+  text-align: right;
+  white-space: nowrap;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+  font-weight: 600;
+  letter-spacing: -0.011em;
+  line-height: 1.2;
+}
+
+h1 {
+  font-size: var(--t-xl);
+}
+h2 {
+  font-size: var(--t-md);
+}
+h3 {
+  font-size: var(--t-base);
+}
+
+p {
+  margin: 0;
+  max-width: var(--measure);
+}
+
+a {
+  color: var(--authority);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+:focus-visible {
+  outline: 2px solid var(--authority);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* -- shell ------------------------------------------------------------- */
+
+.masthead {
+  display: flex;
+  align-items: baseline;
+  gap: var(--gap-5);
+  padding: var(--gap-3) var(--gap-5);
+  border-bottom: 1px solid var(--rule);
+  background: var(--paper-raised);
+}
+
+.masthead__name {
+  font-size: var(--t-base);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.masthead__nav {
+  display: flex;
+  gap: var(--gap-4);
+  font-size: var(--t-sm);
+}
+
+.masthead__nav a {
+  color: var(--ink-soft);
+  text-decoration: none;
+}
+
+.masthead__nav a:hover {
+  color: var(--ink);
+  text-decoration: underline;
+}
+
+.masthead__tenant {
+  margin-left: auto;
+  font-size: var(--t-sm);
+  color: var(--ink-faint);
+}
+
+main {
+  padding: var(--gap-6) var(--gap-5) var(--gap-7);
+  max-width: 1180px;
+  margin: 0 auto;
+}
+
+.lede {
+  font-size: var(--t-lg);
+  font-weight: 500;
+  letter-spacing: -0.015em;
+  max-width: 30ch;
+}
+
+.subhead {
+  margin-top: var(--gap-2);
+  color: var(--ink-soft);
+  font-size: var(--t-sm);
+}
+
+/* -- the queue, as ledger lines ---------------------------------------- */
+
+.ledger {
+  margin-top: var(--gap-5);
+  border-top: 1px solid var(--rule-strong);
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 6.5rem 1fr 11rem 9rem;
+  gap: var(--gap-4);
+  align-items: baseline;
+  padding: var(--gap-3) var(--gap-3) var(--gap-3) var(--gap-4);
+  border-bottom: 1px solid var(--rule);
+  border-left: 3px solid transparent;
+  text-decoration: none;
+  color: inherit;
+}
+
+.row:hover {
+  background: var(--paper-raised);
+}
+
+.row--urgent {
+  border-left-color: var(--expiring);
+}
+.row--expired {
+  border-left-color: var(--stop);
+}
+.row--soon {
+  border-left-color: var(--rule-strong);
+}
+
+.row__clock {
+  font-family: var(--font-mono), monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: var(--t-sm);
+  color: var(--ink-soft);
+}
+
+.row--urgent .row__clock,
+.row--expired .row__clock {
+  color: var(--expiring);
+  font-weight: 500;
+}
+
+.row__who {
+  min-width: 0;
+}
+
+.row__ids {
+  font-family: var(--font-mono), monospace;
+  font-size: var(--t-sm);
+}
+
+.row__ticket {
+  color: var(--ink-faint);
+  margin-left: 0.6em;
+}
+
+.row__reason {
+  color: var(--ink-soft);
+  font-size: var(--t-sm);
+  margin-top: 1px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row__tier {
+  font-family: var(--font-mono), monospace;
+  font-size: var(--t-xs);
+  color: var(--authority);
+}
+
+/* -- the decision, beside the evidence --------------------------------- */
+
+.split {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  gap: var(--gap-6);
+  align-items: start;
+  margin-top: var(--gap-5);
+}
+
+@media (max-width: 880px) {
+  .split {
+    grid-template-columns: 1fr;
+    gap: var(--gap-5);
+  }
+  .row {
+    grid-template-columns: 5rem 1fr 7.5rem;
+  }
+  .row__tier {
+    display: none;
+  }
+}
+
+.headline-amount {
+  font-family: var(--font-mono), monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: var(--t-2xl);
+  font-weight: 500;
+  letter-spacing: -0.02em;
+}
+
+.kv {
+  display: grid;
+  grid-template-columns: 9.5rem 1fr;
+  gap: var(--gap-2) var(--gap-4);
+  font-size: var(--t-sm);
+  margin: 0;
+}
+
+.kv dt {
+  color: var(--ink-soft);
+}
+
+.kv dd {
+  margin: 0;
+  font-family: var(--font-mono), monospace;
+  font-variant-numeric: tabular-nums;
+  word-break: break-word;
+}
+
+.panel {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--paper-raised);
+  padding: var(--gap-4);
+}
+
+.panel + .panel {
+  margin-top: var(--gap-4);
+}
+
+.panel__title {
+  font-size: var(--t-sm);
+  font-weight: 600;
+  margin-bottom: var(--gap-3);
+}
+
+.why {
+  border-left: 3px solid var(--authority);
+  background: var(--authority-wash);
+  padding: var(--gap-3) var(--gap-4);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  margin-top: var(--gap-4);
+}
+
+.why--stop {
+  border-left-color: var(--stop);
+  background: var(--stop-wash);
+}
+
+.why__rule {
+  font-family: var(--font-mono), monospace;
+  font-size: var(--t-xs);
+  color: var(--ink-soft);
+}
+
+.why ul {
+  margin: var(--gap-2) 0 0;
+  padding-left: 1.1rem;
+  font-size: var(--t-sm);
+}
+
+/*
+ * The arithmetic, set as a ledger subtotal.
+ *
+ * This is the one place the design raises its voice, and it earns it: the
+ * reviewer is being shown the remainder rather than told it, so the figure
+ * they are authorising against is something they can check.
+ */
+.arith {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--gap-1) var(--gap-4);
+  font-size: var(--t-sm);
+}
+
+.arith dt {
+  color: var(--ink-soft);
+}
+
+.arith dd {
+  margin: 0;
+  font-family: var(--font-mono), monospace;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.arith__total {
+  border-top: 1px solid var(--ink);
+  padding-top: var(--gap-1);
+  margin-top: var(--gap-1);
+  font-weight: 600;
+}
+
+/* -- controls ---------------------------------------------------------- */
+
+form {
+  margin-top: var(--gap-4);
+}
+
+fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0 0 var(--gap-4);
+}
+
+legend {
+  font-size: var(--t-sm);
+  font-weight: 600;
+  padding: 0;
+  margin-bottom: var(--gap-2);
+}
+
+.choices {
+  display: flex;
+  gap: var(--gap-2);
+  flex-wrap: wrap;
+}
+
+.choice {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--gap-2);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  padding: var(--gap-2) var(--gap-3);
+  font-size: var(--t-sm);
+  cursor: pointer;
+  background: var(--paper-raised);
+}
+
+.choice:has(input:checked) {
+  border-color: var(--authority);
+  box-shadow: inset 0 0 0 1px var(--authority);
+}
+
+.choice input {
+  accent-color: var(--authority);
+  margin: 0;
+}
+
+label {
+  display: block;
+  font-size: var(--t-sm);
+  color: var(--ink-soft);
+  margin-bottom: var(--gap-1);
+}
+
+input[type='text'],
+textarea {
+  width: 100%;
+  font: inherit;
+  font-size: var(--t-sm);
+  color: var(--ink);
+  background: var(--paper-raised);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  padding: var(--gap-2) var(--gap-3);
+}
+
+input.amount-input {
+  font-family: var(--font-mono), monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+textarea {
+  min-height: 4.5rem;
+  resize: vertical;
+}
+
+.field {
+  margin-bottom: var(--gap-4);
+  max-width: 34rem;
+}
+
+.hint {
+  font-size: var(--t-xs);
+  color: var(--ink-faint);
+  margin-top: var(--gap-1);
+}
+
+button {
+  font: inherit;
+  font-size: var(--t-sm);
+  font-weight: 500;
+  padding: var(--gap-2) var(--gap-5);
+  border-radius: var(--radius);
+  border: 1px solid var(--ink);
+  background: var(--ink);
+  color: var(--paper);
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.problem {
+  border-left: 3px solid var(--stop);
+  background: var(--stop-wash);
+  padding: var(--gap-3) var(--gap-4);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  font-size: var(--t-sm);
+  margin-bottom: var(--gap-4);
+}
+
+.problem strong {
+  display: block;
+  margin-bottom: var(--gap-1);
+}
+
+/* -- states ------------------------------------------------------------ */
+
+.empty {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  padding: var(--gap-6);
+  text-align: left;
+  margin-top: var(--gap-5);
+}
+
+.empty h2 {
+  margin-bottom: var(--gap-2);
+}
+
+.settled {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--gap-2);
+  font-size: var(--t-sm);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  padding: var(--gap-2) var(--gap-3);
+}
+
+.settled__status {
+  font-weight: 600;
+}
+
+/* -- the run trace ----------------------------------------------------- */
+
+.trace {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: var(--gap-5);
+  font-size: var(--t-sm);
+}
+
+.trace th {
+  text-align: left;
+  font-weight: 600;
+  font-size: var(--t-xs);
+  color: var(--ink-soft);
+  border-bottom: 1px solid var(--rule-strong);
+  padding: var(--gap-2) var(--gap-3);
+}
+
+.trace td {
+  border-bottom: 1px solid var(--rule);
+  padding: var(--gap-2) var(--gap-3);
+  vertical-align: baseline;
+}
+
+.trace td.num,
+.trace th.num {
+  text-align: right;
+  font-family: var(--font-mono), monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.trace td.id {
+  font-family: var(--font-mono), monospace;
+  font-size: var(--t-xs);
+}
+
+.trace tr.failed {
+  background: var(--stop-wash);
+}
+
+.trace tr.failed td.outcome {
+  color: var(--stop);
+  font-weight: 500;
+}
+
+.scopes {
+  margin-top: var(--gap-4);
+  font-size: var(--t-sm);
+  color: var(--ink-soft);
+}
+
+.scopes code {
+  font-size: var(--t-xs);
+}

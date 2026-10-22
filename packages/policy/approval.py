@@ -90,6 +90,18 @@ class ApprovalRequest:
     fingerprint: str
     decision: dict[str, Any]
     proposal: dict[str, Any]
+    evidence: dict[str, Any]
+    """The ledger facts behind the proposal, snapshotted when it was raised.
+
+    Stored rather than re-read, for the same reason the decision is: a
+    reviewer opening this next week must see what was true when the rule
+    fired. It is also what the console renders after a restart, when the
+    interrupt payload that first carried it is long gone.
+
+    Ledger facts and passage ids only — never the ticket body. ADR 0005 rule
+    4: the panel that authorises money carries no merchant-supplied text,
+    because an injected instruction that reaches a reviewer has found a human
+    to carry it."""
     created_at: datetime
     expires_at: datetime
     status: ApprovalStatus = ApprovalStatus.PENDING
@@ -156,6 +168,7 @@ def build_request(
     merchant_id: str,
     decision: dict[str, Any],
     proposal: dict[str, Any],
+    evidence: dict[str, Any] | None = None,
     expires_after_hours: int,
     now: datetime | None = None,
 ) -> ApprovalRequest:
@@ -176,6 +189,7 @@ def build_request(
         fingerprint=proposal_print,
         decision=decision,
         proposal=proposal,
+        evidence=evidence or {},
         created_at=now,
         expires_at=now + timedelta(hours=expires_after_hours),
     )

@@ -158,6 +158,15 @@ that fails the job if those tests silently skip.
 **Done when** S03, S04, S05 and S08 pass, including S04's restart-while-pending and all three
 decision branches.
 
+**Delivered.** All four S04 branches rather than three — `expired` is a branch the fixture lists
+and the original wording undercounted. The policy engine reads the required approval from the
+tenant's tier table rather than computing it a second time; `ADR 0007` records why pending
+approvals are indexed beside the checkpoint and swept from outside the graph; `ADR 0008` records
+why the console duplicates the approval rules as user experience while the API keeps every one of
+them as authority. The no-mutation-before-interrupt rule is asserted structurally as well as
+behaviourally: a test parses the agent package and fails if any function both interrupts and calls
+the tool invoker.
+
 ---
 
 ## Phase 7 — Failure engineering

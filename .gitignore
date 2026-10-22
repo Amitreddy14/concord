@@ -20,6 +20,9 @@ node_modules/
 .next/
 out/
 *.tsbuildinfo
+# Written by `next build` and marked "should not be edited"; regenerated on
+# every build, so committing it only produces diffs nobody authored.
+apps/console/next-env.d.ts
 
 # Data and artifacts
 data/
