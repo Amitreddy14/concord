@@ -113,6 +113,54 @@ jobs:
             exit 1
           fi
 
+  console:
+    name: reviewer console
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: apps/console/package-lock.json
+
+      # `ci` rather than `install`: the lock file is the version set the
+      # console was verified against, and a CI run that resolves a different
+      # one is not testing what will ship.
+      - name: Install the console's dependencies
+        run: npm --prefix apps/console ci
+
+      - name: Lint and format check
+        run: npm --prefix apps/console run lint
+
+      - name: Static type check
+        run: npm --prefix apps/console run types
+
+      - name: Run the console's tests
+        run: npm --prefix apps/console run test
+
+      # The build is the only thing that exercises the server components and
+      # the font pipeline. Lint and types both pass on a console that cannot
+      # be served.
+      - name: Build
+        run: npm --prefix apps/console run build
+
+      # The fonts are vendored through npm precisely so the build needs no
+      # third-party CDN. If someone reintroduces `next/font/google`, this is
+      # the check that says so rather than a build that fails on a locked-down
+      # network months later.
+      - name: Confirm no build-time font fetching
+        run: |
+          if grep -rn "next/font/google" apps/console/src; then
+            echo "::error::next/font/google fetches at build time; use the vendored @fontsource packages"
+            exit 1
+          fi
+          echo "fonts are self-hosted"
+
   repo-hygiene:
     name: repository hygiene
     runs-on: ubuntu-latest
