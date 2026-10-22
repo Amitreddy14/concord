@@ -134,6 +134,12 @@ match a payments corpus.
 **Done when** S02, S07 and S11 pass, and the resolution order is covered by unit tests
 independent of the model.
 
+**Verified.** 252 tests. Resolution is pure functions with no model in the path, so the order is
+checked directly — including that an amount matching the *older* payment selects it, which
+recency alone would not. S11 terminates in a question with both candidates recorded and never
+reaches the drafter. The durable checkpointer runs against a real Postgres in CI, with a guard
+that fails the job if those tests silently skip.
+
 ---
 
 ## Phase 6 — Policy, risk tiering, human approval
