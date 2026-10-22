@@ -153,9 +153,15 @@ jobs:
       # third-party CDN. If someone reintroduces `next/font/google`, this is
       # the check that says so rather than a build that fails on a locked-down
       # network months later.
+      #
+      # Matches the import, not the name. The first version grepped for the
+      # bare string and failed on the comment in layout.tsx explaining why the
+      # fonts are vendored — the same mistake check_money.py was rewritten to
+      # avoid, whose docstring says it is "an AST scan, not a grep, so it does
+      # not fire on the word float in a comment".
       - name: Confirm no build-time font fetching
         run: |
-          if grep -rn "next/font/google" apps/console/src; then
+          if grep -rnE "(from|require\\()\\s*['\"]next/font/google['\"]" apps/console/src; then
             echo "::error::next/font/google fetches at build time; use the vendored @fontsource packages"
             exit 1
           fi
