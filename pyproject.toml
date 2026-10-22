@@ -15,6 +15,10 @@ dependencies = [
   # The agent runtime. Floor is the version the graph was written against;
   # `interrupt` and `Command` are the parts phase 6 depends on (ADR 0001).
   "langgraph>=1.2",
+  # Durable checkpoints. Without these a pending approval dies with the
+  # process, which is the one thing ADR 0001 chose LangGraph to prevent.
+  "langgraph-checkpoint-postgres>=3.0",
+  "psycopg[binary,pool]>=3.2",
 ]
 
 [project.optional-dependencies]

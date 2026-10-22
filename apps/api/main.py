@@ -25,6 +25,8 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from apps.api.runs import Run, RunStatus, RunStore
+from packages.agent.checkpointing import checkpointer as checkpointer_context
+from packages.agent.checkpointing import thread_id_for
 from packages.agent.graph import build_graph, initial_state
 from packages.agent.nodes import NodeContext
 from packages.agent.structured import StructuredOutputError
@@ -56,6 +58,10 @@ class Dependencies:
     client: httpx.AsyncClient
     ledger: InMemoryLedger
     store: RunStore
+    database_url: str | None = None
+    """When absent the checkpointer is in-memory, which is a development
+    convenience only: a deployment running without durable checkpoints loses
+    every pending approval on restart and looks fine until it does."""
 
 
 def service_urls() -> dict[str, str]:
@@ -88,9 +94,13 @@ async def execute(run: Run, deps: Dependencies, submission: SubmitTicket) -> Non
         client=deps.client,
         ledger=deps.ledger,
     )
-    context = NodeContext(gateway=deps.gateway, invoker=invoker, tenant_id=deps.tenant.tenant_id)
-    graph = build_graph(context)
-
+    context = NodeContext(
+        gateway=deps.gateway,
+        invoker=invoker,
+        tenant_id=deps.tenant.tenant_id,
+        require_citations=deps.tenant.requires_citations,
+        min_passage_score=deps.tenant.grounding.get("min_passage_score"),
+    )
     state = initial_state(
         run_id=run.run_id,
         ticket_id=run.ticket_id,
@@ -100,14 +110,19 @@ async def execute(run: Run, deps: Dependencies, submission: SubmitTicket) -> Non
         body=submission.body,
     )
 
+    # One thread per ticket rather than per run: a ticket resumed after an
+    # approval is the same conversation, and must see what the first run
+    # established rather than starting from nothing.
+    config = {"configurable": {"thread_id": thread_id_for(run.ticket_id)}}
+
     try:
-        async for update in graph.astream(
-            state, config={"configurable": {"thread_id": run.ticket_id}}
-        ):
-            for node, payload in update.items():
-                run.emit("node.completed", node=node, keys=sorted(payload or {}))
-        snapshot = await graph.aget_state(config={"configurable": {"thread_id": run.ticket_id}})
-        final = dict(snapshot.values)
+        async with checkpointer_context(deps.database_url) as saver:
+            graph = build_graph(context, saver)
+            async for update in graph.astream(state, config=config):
+                for node, payload in update.items():
+                    run.emit("node.completed", node=node, keys=sorted(payload or {}))
+            snapshot = await graph.aget_state(config=config)
+            final = dict(snapshot.values)
     except (ToolError, ScopeViolation, LLMError, StructuredOutputError) as error:
         run.failure = f"{type(error).__name__}: {error}"
         run.finish(RunStatus.FAILED, reason=run.failure)
@@ -119,6 +134,7 @@ async def execute(run: Run, deps: Dependencies, submission: SubmitTicket) -> Non
 
     run.result = {
         "intent": (final.get("triage") or {}).get("intent"),
+        "resolution": final.get("resolution"),
         "reply": final.get("reply"),
         "grounding": final.get("grounding"),
         "draft": final.get("draft"),
@@ -145,6 +161,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         client=client,
         ledger=InMemoryLedger(),
         store=RunStore(),
+        database_url=os.environ.get("DATABASE_URL"),
     )
     try:
         yield
