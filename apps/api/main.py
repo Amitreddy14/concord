@@ -13,23 +13,30 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from contextlib import AsyncExitStack, asynccontextmanager
+from dataclasses import dataclass, field
 from typing import Annotated, Any
 
 import httpx
 from fastapi import Body, Depends, FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
+from langgraph.types import Command
 from pydantic import BaseModel, ConfigDict, Field
 
+from apps.api import approvals as approval_logic
 from apps.api.runs import Run, RunStatus, RunStore
 from packages.agent.checkpointing import checkpointer as checkpointer_context
 from packages.agent.checkpointing import thread_id_for
 from packages.agent.graph import build_graph, initial_state
 from packages.agent.nodes import NodeContext
 from packages.agent.structured import StructuredOutputError
+from packages.policy.approval import (
+    ApprovalStore,
+    InMemoryApprovalStore,
+)
 from packages.policy.tenant import TenantConfig, load_tenant
 from packages.shared.ledger import InMemoryLedger
 from packages.shared.llm import LLMError, LLMGateway, OllamaGateway
@@ -58,10 +65,42 @@ class Dependencies:
     client: httpx.AsyncClient
     ledger: InMemoryLedger
     store: RunStore
+    approvals: ApprovalStore = field(default_factory=InMemoryApprovalStore)
+    """Shared by the graph and the API. One store, because the node that
+    pauses and the endpoint that answers are looking at the same queue — two
+    stores would make an approval recorded by the API invisible to the run
+    waiting for it."""
     database_url: str | None = None
     """When absent the checkpointer is in-memory, which is a development
     convenience only: a deployment running without durable checkpoints loses
     every pending approval on restart and looks fine until it does."""
+
+    _stack: AsyncExitStack | None = field(default=None, repr=False)
+    _saver: Any | None = field(default=None, repr=False)
+
+    async def checkpointer(self) -> Any:
+        """The one checkpointer this process uses, opened on first use.
+
+        One, and not one per run. Opening a checkpointer inside each graph
+        drive was a bug with two faces: against Postgres it built a connection
+        pool per ticket, and against the in-memory saver it handed every
+        resume a brand-new empty store — so a paused run could not be found by
+        the request resuming it, and the API reported a KeyError from a node
+        reading state that was never loaded. Scoping it to the process is what
+        makes a pause and its resume look at the same thing.
+        """
+        if self._saver is None:
+            self._stack = AsyncExitStack()
+            self._saver = await self._stack.enter_async_context(
+                checkpointer_context(self.database_url)
+            )
+        return self._saver
+
+    async def aclose(self) -> None:
+        if self._stack is not None:
+            await self._stack.aclose()
+            self._stack = None
+            self._saver = None
 
 
 def service_urls() -> dict[str, str]:
@@ -78,29 +117,27 @@ def get_dependencies(request: Request) -> Dependencies:
     return deps
 
 
-async def execute(run: Run, deps: Dependencies, submission: SubmitTicket) -> None:
-    """Run the graph, emitting progress as it goes.
-
-    Every failure becomes a terminal run state rather than an exception that
-    disappears into a background task. A run that vanishes silently is worse
-    than one that fails loudly, because nobody knows to look.
-    """
-    run.status = RunStatus.RUNNING
-    run.emit("run.started", ticket_id=run.ticket_id)
-
+def _context_for(deps: Dependencies) -> NodeContext:
     invoker = ToolInvoker(
         tenant=deps.tenant,
         base_urls=deps.base_urls,
         client=deps.client,
         ledger=deps.ledger,
     )
-    context = NodeContext(
+    return NodeContext(
         gateway=deps.gateway,
         invoker=invoker,
         tenant_id=deps.tenant.tenant_id,
         require_citations=deps.tenant.requires_citations,
         min_passage_score=deps.tenant.grounding.get("min_passage_score"),
+        approvals=deps.approvals,
     )
+
+
+async def execute(run: Run, deps: Dependencies, submission: SubmitTicket) -> None:
+    """Start a run from a submitted ticket."""
+    run.status = RunStatus.RUNNING
+    run.emit("run.started", ticket_id=run.ticket_id)
     state = initial_state(
         run_id=run.run_id,
         ticket_id=run.ticket_id,
@@ -109,6 +146,34 @@ async def execute(run: Run, deps: Dependencies, submission: SubmitTicket) -> Non
         subject=submission.subject,
         body=submission.body,
     )
+    await _drive(run, deps, state)
+
+
+async def resume_run(run: Run, deps: Dependencies, *, approval_id: str) -> None:
+    """Continue a run that was waiting for a human.
+
+    The resume payload names the approval, and that is all it does. The
+    authority is the stored record, which ``await_approval`` re-reads — an
+    approval id arriving over HTTP is the one input here an attacker could
+    shape, and it must not be the thing that authorises a refund.
+    """
+    run.status = RunStatus.RUNNING
+    run.emit("run.resumed", approval_id=approval_id)
+    await _drive(run, deps, Command(resume={"approval_id": approval_id}))
+
+
+async def _drive(run: Run, deps: Dependencies, graph_input: Any) -> None:
+    """Run the graph to its next stopping point.
+
+    Every failure becomes a terminal run state rather than an exception that
+    disappears into a background task. A run that vanishes silently is worse
+    than one that fails loudly, because nobody knows to look.
+
+    "Stopping point" and not "completion": the graph may stop because it is
+    waiting for a human, which is a healthy outcome and must not be recorded
+    as a finished run.
+    """
+    context = _context_for(deps)
 
     # One thread per ticket rather than per run: a ticket resumed after an
     # approval is the same conversation, and must see what the first run
@@ -116,13 +181,15 @@ async def execute(run: Run, deps: Dependencies, submission: SubmitTicket) -> Non
     config = {"configurable": {"thread_id": thread_id_for(run.ticket_id)}}
 
     try:
-        async with checkpointer_context(deps.database_url) as saver:
-            graph = build_graph(context, saver)
-            async for update in graph.astream(state, config=config):
-                for node, payload in update.items():
-                    run.emit("node.completed", node=node, keys=sorted(payload or {}))
-            snapshot = await graph.aget_state(config=config)
-            final = dict(snapshot.values)
+        saver = await deps.checkpointer()
+        graph = build_graph(context, saver)
+        async for update in graph.astream(graph_input, config=config):
+            for node, payload in update.items():
+                run.emit("node.completed", node=node, keys=sorted(payload or {}))
+        snapshot = await graph.aget_state(config=config)
+        final = dict(snapshot.values)
+        paused = bool(snapshot.next)
+        interrupts = [i.value for task in snapshot.tasks for i in task.interrupts]
     except (ToolError, ScopeViolation, LLMError, StructuredOutputError) as error:
         run.failure = f"{type(error).__name__}: {error}"
         run.finish(RunStatus.FAILED, reason=run.failure)
@@ -132,16 +199,43 @@ async def execute(run: Run, deps: Dependencies, submission: SubmitTicket) -> Non
         run.finish(RunStatus.FAILED, reason=run.failure)
         return
 
+    if paused:
+        # Waiting for a reviewer. The run is not finished and must not be
+        # marked so: a completed run stops emitting, and the console would
+        # show a resolved ticket with a refund nobody authorised pending
+        # behind it.
+        run.status = RunStatus.AWAITING_APPROVAL
+        pending = next((i for i in interrupts if isinstance(i, dict)), {})
+        run.emit(
+            "run.awaiting_approval",
+            approval_id=pending.get("approval_id"),
+            expires_at=pending.get("expires_at"),
+        )
+        return
+
     run.result = {
         "intent": (final.get("triage") or {}).get("intent"),
         "resolution": final.get("resolution"),
         "reply": final.get("reply"),
         "grounding": final.get("grounding"),
         "draft": final.get("draft"),
+        "decision": final.get("decision"),
+        "approval": final.get("approval"),
+        "refund": final.get("refund"),
         "passages": [p.get("passage_id") for p in final.get("passages") or []],
         "visited": final.get("visited", []),
         "usage": deps.gateway.usage.for_run(run.run_id),
     }
+
+    if final.get("failure") == "approval_expired":
+        # Abandoned rather than failed: nothing went wrong technically, a
+        # human simply never answered. S04's expired branch asks for exactly
+        # this distinction.
+        run.finish(RunStatus.ABANDONED, reason="approval expired without a decision")
+        return
+    if final.get("status") == "failed":
+        run.finish(RunStatus.FAILED, reason=final.get("failure") or "run failed")
+        return
     run.finish(RunStatus.COMPLETED)
 
 
@@ -163,9 +257,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         store=RunStore(),
         database_url=os.environ.get("DATABASE_URL"),
     )
+    sweeper = asyncio.create_task(_sweep_forever(app.state.deps))
     try:
         yield
     finally:
+        sweeper.cancel()
+        await app.state.deps.aclose()
         await client.aclose()
 
 
@@ -284,10 +381,62 @@ def create_app(deps: Dependencies | None = None) -> FastAPI:
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
+    # The approval endpoints live in their own router: they are the console's
+    # entire surface, and they have their own validation rules.
+    app.include_router(
+        approval_logic.build_router(
+            get_deps=get_dependencies,
+            resume=resume_run,
+            sweep=_sweep,
+            background=_BACKGROUND,
+        )
+    )
     return app
 
 
 _BACKGROUND: set[asyncio.Task[None]] = set()
+
+#: How often the expiry sweep runs. Minutes rather than seconds because an
+#: approval window is measured in hours, and rather than hours because a
+#: merchant waiting on an expired request should not wait an extra one.
+SWEEP_INTERVAL_SECONDS = 300
+
+
+async def _sweep(deps: Dependencies) -> dict[str, Any]:
+    """Expire overdue approvals and resume each waiting run so it terminates.
+
+    Expiring the row is only half of it. The run is still paused inside the
+    graph, and a row marked expired beside a thread that never moves is the
+    same silence as no sweep at all — so each one is resumed, which takes the
+    rejected-or-expired branch out of `await_approval` and ends the run.
+    """
+    expired = deps.approvals.sweep_expired()
+    resumed: list[str] = []
+    for request in expired:
+        run = deps.store.get(request.run_id)
+        if run is None:
+            continue
+        await resume_run(run, deps, approval_id=request.approval_id)
+        resumed.append(request.approval_id)
+    return {
+        "expired": [r.approval_id for r in expired],
+        "resumed": resumed,
+    }
+
+
+async def _sweep_forever(deps: Dependencies) -> None:
+    """The loop LangGraph does not provide.
+
+    Errors are swallowed per iteration on purpose: a sweep that dies on one
+    bad row stops expiring every other approval, and the failure mode of this
+    loop going quiet is a queue that silently stops timing out.
+    """
+    while True:
+        await asyncio.sleep(SWEEP_INTERVAL_SECONDS)
+        try:
+            await _sweep(deps)
+        except Exception:
+            logging.getLogger(__name__).exception("approval sweep failed")
 
 
 @asynccontextmanager

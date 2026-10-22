@@ -21,9 +21,11 @@ from typing import Any
 
 from langgraph.graph import END, START, StateGraph
 
-from packages.agent import nodes, specialists
+from packages.agent import gate, nodes, specialists
 from packages.agent.checkpointing import checkpointer as checkpointer_context
 from packages.agent.state import AgentState
+from packages.policy.approval import PROCEEDING
+from packages.policy.engine import Permission
 
 NodeFn = Callable[[AgentState], Coroutine[Any, Any, dict[str, Any]]]
 
@@ -50,6 +52,10 @@ def build_graph(context: nodes.NodeContext, checkpointer: Any | None = None) -> 
         ("triage", nodes.triage),
         ("gather", nodes.gather),
         ("retrieve", nodes.retrieve),
+        ("propose", gate.propose),
+        ("decide", gate.decide),
+        ("await_approval", gate.await_approval),
+        ("act", gate.act),
         ("draft", nodes.draft),
         ("verify", nodes.verify_grounding),
     )
@@ -78,7 +84,30 @@ def build_graph(context: nodes.NodeContext, checkpointer: Any | None = None) -> 
             {"retrieve": "retrieve", "end": END},
         )
 
-    builder.add_conditional_edges("retrieve", _has_passages, {"draft": "draft", "verify": "verify"})
+    # Retrieval grounds the reply. A run that is going to move money goes
+    # through the gate first, because a drafted reply that promises a refund
+    # the policy engine then refuses is worse than no reply at all.
+    builder.add_conditional_edges(
+        "retrieve",
+        _after_retrieval,
+        {"propose": "propose", "draft": "draft", "verify": "verify"},
+    )
+
+    builder.add_conditional_edges("propose", _has_proposal, {"decide": "decide", "draft": "draft"})
+    builder.add_conditional_edges(
+        "decide",
+        _after_decision,
+        {"act": "act", "await_approval": "await_approval", "draft": "draft"},
+    )
+
+    # The gate's two exits. An approved or modified proposal proceeds to the
+    # one node that mutates; a rejection or an expiry goes straight to the
+    # drafter, which explains the outcome rather than announcing a refund.
+    builder.add_conditional_edges(
+        "await_approval", _after_approval, {"act": "act", "draft": "draft"}
+    )
+    builder.add_edge("act", "draft")
+
     builder.add_edge("draft", "verify")
     builder.add_edge("verify", END)
 
@@ -90,8 +119,51 @@ def _specialist_next(state: AgentState) -> str:
     return "end" if state.get("reply") else "retrieve"
 
 
-def _has_passages(state: AgentState) -> str:
+# Intents that can end in money moving. Everything else skips the refund path
+# rather than proposing an action and having it refused: a status question has
+# nothing to propose.
+REFUND_INTENTS = frozenset({"refund_request", "complaint_no_action", "dispute_notice"})
+
+
+def _after_retrieval(state: AgentState) -> str:
+    """Route to the gate when there is something to decide.
+
+    Two ways in. A refund intent with captures to refund against, and an
+    intent whose answer is an account action the engine has to classify
+    (S08). Everything else goes straight to the drafter.
+    """
+    intent = str((state.get("triage") or {}).get("intent", ""))
+    if intent in REFUND_INTENTS and state.get("captures"):
+        return "propose"
+    if intent in gate.PROPOSAL_FOR_INTENT:
+        return "propose"
     return "draft" if state.get("passages") else "verify"
+
+
+def _has_proposal(state: AgentState) -> str:
+    return "decide" if state.get("proposal") else "draft"
+
+
+def _after_decision(state: AgentState) -> str:
+    """Route on the permission, and on nothing else.
+
+    Four permissions, three destinations. `forbidden` and `refused` both go to
+    the drafter because both need explaining to a merchant, and neither offers
+    an approval — a reviewer cannot authorise a capture outside the refund
+    window any more than they can authorise a forbidden action, and putting
+    either in an approval queue would imply they could.
+    """
+    permission = (state.get("decision") or {}).get("permission")
+    if permission == str(Permission.PERMITTED):
+        return "act"
+    if permission == str(Permission.NEEDS_APPROVAL):
+        return "await_approval"
+    return "draft"
+
+
+def _after_approval(state: AgentState) -> str:
+    status = (state.get("approval") or {}).get("status")
+    return "act" if status in {str(s) for s in PROCEEDING} else "draft"
 
 
 def initial_state(

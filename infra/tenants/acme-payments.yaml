@@ -27,22 +27,35 @@ refund_policy:
   multi_capture_requires_approval: true
 
 risk_tiers:
-  # Evaluated in order; the first match wins. Every decision records the id.
-  - id: R0-informational
-    when: { mutating: false }
-    approval: none
-  - id: R1-routine-refund
-    when: { action: create_refund, within_autonomy_cap: true, reason_in_autonomous_set: true }
-    approval: none
-  - id: R2-elevated-refund
-    when: { action: create_refund, within_autonomy_cap: false }
-    approval: reviewer
+  # Evaluated in order; the first match wins, and the matched tier's
+  # `approval` is what decides. The engine computes the conditions and reads
+  # the answer here rather than deciding separately — two places deciding the
+  # same thing is how a tier came to say `approval: none` while the engine
+  # demanded one.
+  #
+  # Order matters. The compliance and dispute tiers sit above the refund tiers
+  # so a refund that touches them cannot match a permissive tier first.
   - id: R3-compliance
     when: { touches: [kyc, payout_hold, sanctions] }
     approval: forbidden        # no human in this console may authorise it either
   - id: R4-dispute
     when: { touches: [chargeback] }
     approval: specialist_queue
+  - id: R0-informational
+    when: { mutating: false }
+    approval: none
+  - id: R2a-multi-capture
+    when: { action: create_refund, spans_multiple_captures: true }
+    approval: reviewer
+  - id: R2b-non-autonomous-reason
+    when: { action: create_refund, reason_in_autonomous_set: false }
+    approval: reviewer
+  - id: R2-elevated-refund
+    when: { action: create_refund, within_autonomy_cap: false }
+    approval: reviewer
+  - id: R1-routine-refund
+    when: { action: create_refund, within_autonomy_cap: true, reason_in_autonomous_set: true }
+    approval: none
 
 forbidden_actions:
   # Actions no risk tier can unlock. These are not "high risk", they are out of
