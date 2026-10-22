@@ -346,6 +346,10 @@ def create_app(deps: Dependencies | None = None) -> FastAPI:
                     "outcome": str(s.outcome),
                     "tool": s.tool,
                     "scope": s.scope,
+                    # The rule a policy step turned on. Present so the run
+                    # trace can show which rule decided, rather than only
+                    # that a decision happened.
+                    "policy_rule_id": s.policy_rule_id,
                     "attempt": s.attempt,
                     "duration_ms": s.duration_ms,
                     "error_code": s.error_code,
