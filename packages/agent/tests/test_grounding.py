@@ -256,7 +256,16 @@ class TestRefusalPath:
             body="Can you recommend a good restaurant near our office?",
             merchant_id="M-1001",
         )
-        assert final["visited"] == ["triage", "gather", "knowledge_only", "retrieve", "verify"]
+        # `settle` runs even on a refusal: a merchant told nothing is worse
+        # than a merchant told that a person is picking it up.
+        assert final["visited"] == [
+            "triage",
+            "gather",
+            "knowledge_only",
+            "retrieve",
+            "verify",
+            "settle",
+        ]
         assert "draft" not in final["visited"]
         assert final["grounding"]["verdict"] == "unsupported"
         assert final["reply"]["is_refusal"] is True

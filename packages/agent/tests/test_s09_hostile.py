@@ -47,10 +47,17 @@ TRIAGE = json.dumps(
         "summary": "Merchant asks for order 5150 to be refunded.",
     }
 )
+# The cited passage has to be one retrieval actually returns for this
+# scenario's query, because the grounding verifier refuses a citation it
+# cannot match — correctly, since a plausible-looking id for a corpus the
+# model did not see is the clearest signal of a fabricated reference. A real
+# model cites what it was given; a scripted one has to be told.
+S09_PASSAGE = "psg_refund-howto.v4.after-submitting"
+
 DRAFT = json.dumps(
     {
         "reply": "That refund is on its way and reaches the card in 5 to 7 working days.",
-        "citations": ["psg_refund-policy.v3.credit-timelines"],
+        "citations": [S09_PASSAGE],
         "unsupported_claims": [],
     }
 )
@@ -71,7 +78,48 @@ def s09() -> Scenario:
     return load_all()["S09"]
 
 
-async def run_once(scenario: Scenario, tenant: TenantConfig, run_id: str) -> dict[str, Any]:
+def open_ticket(services: dict[str, Any], scenario: Scenario) -> str:
+    """Open the ticket the run will work, the way intake does.
+
+    Nothing seeds tickets, and the ids are service-generated, so a run whose
+    `ticket_id` was invented locally could not record its own outcome.
+
+    The injector is quiet for this one call. S09's faults are about what
+    happens to the *run* — a gateway that times out mid-refund — and a
+    hostile profile that also rate-limits intake would fail the test during
+    setup, for a reason the scenario is not about. Intake facing the same
+    faults is a real concern and belongs in a scenario of its own rather
+    than smuggled into this one.
+    """
+    ticketing = services["ticketing"]
+    armed = ticketing.state.injector.profile
+    ticketing.state.injector.profile = FaultProfile.OFF
+    try:
+        return _create(ticketing, scenario)
+    finally:
+        ticketing.state.injector.profile = armed
+
+
+def _create(ticketing: Any, scenario: Scenario) -> str:
+    ticket = scenario.ticket
+    with TestClient(ticketing) as client:
+        response = client.post(
+            "/tickets",
+            json={
+                "merchant_id": ticket["merchant_id"],
+                "channel": ticket.get("channel", "chat"),
+                "subject": ticket["subject"],
+                "body": ticket["body"],
+            },
+            headers={"Idempotency-Key": f"intake:{scenario.scenario_id}"},
+        )
+        assert response.status_code == 201, response.text
+        return str(response.json()["ticket_id"])
+
+
+async def run_once(
+    scenario: Scenario, tenant: TenantConfig, run_id: str, *, ticket_id: str | None = None
+) -> dict[str, Any]:
     """One full graph run against freshly seeded, hostile services.
 
     Services are rebuilt per run rather than reset, so the fault script's
@@ -84,6 +132,7 @@ async def run_once(scenario: Scenario, tenant: TenantConfig, run_id: str) -> dic
     for app in services.values():
         with TestClient(app) as client:
             assert client.post("/_test/reset", json=payload).status_code == 200
+    opened = ticket_id or open_ticket(services, scenario)
 
     hosts = {
         httpx.URL(u).host: a for u, a in zip(BASE_URLS.values(), services.values(), strict=False)
@@ -105,11 +154,11 @@ async def run_once(scenario: Scenario, tenant: TenantConfig, run_id: str) -> dic
             approvals=InMemoryApprovalStore(),
         )
         graph = build_graph(context, MemorySaver())
-        config = {"configurable": {"thread_id": f"ticket:{run_id}"}}
+        config = {"configurable": {"thread_id": f"ticket:{opened}"}}
         ticket = scenario.ticket
         state = initial_state(
             run_id=run_id,
-            ticket_id=run_id,
+            ticket_id=opened,
             tenant_id="acme-payments",
             merchant_id=str(ticket["merchant_id"]),
             subject=str(ticket["subject"]),
@@ -121,6 +170,8 @@ async def run_once(scenario: Scenario, tenant: TenantConfig, run_id: str) -> dic
 
     return {
         "state": dict(snapshot.values),
+        "ticket_id": opened,
+        "tickets": dict(services["ticketing"].state.store.tickets),  # type: ignore[attr-defined]
         "ledger": ledger,
         "refunds": list(services["payments"].state.store.refunds.values()),  # type: ignore[attr-defined]
         "backoffs": sleeper.delays,
@@ -220,12 +271,16 @@ class TestDeterministicReplay:
             approvals=InMemoryApprovalStore(),
         )
         graph = build_graph(context, MemorySaver())
-        config = {"configurable": {"thread_id": "ticket:replay"}}
+        config = {"configurable": {"thread_id": "ticket:replayed"}}
         ticket = s09.ticket
         async for _ in graph.astream(
             initial_state(
                 run_id="run_s09_replay",
-                ticket_id="replay",
+                # The same ticket as the original. A replay against a
+                # different ticket writes different arguments to
+                # `post_message` and diverges for a reason that has nothing
+                # to do with the run's decisions.
+                ticket_id=original["ticket_id"],
                 tenant_id="acme-payments",
                 merchant_id=str(ticket["merchant_id"]),
                 subject=str(ticket["subject"]),
