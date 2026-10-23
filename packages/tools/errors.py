@@ -50,6 +50,11 @@ _BY_STATUS: dict[int, ErrorKind] = {
     401: ErrorKind.FATAL,
     403: ErrorKind.FATAL,
     404: ErrorKind.FATAL,
+    # The server gave up waiting for the request. It is unlikely to have
+    # applied anything, and "unlikely" is not "did not" — for a mutation the
+    # difference is a second refund, so it is indeterminate rather than
+    # retryable.
+    408: ErrorKind.INDETERMINATE,
     409: ErrorKind.FATAL,
     422: ErrorKind.NEEDS_HUMAN,
     429: ErrorKind.RETRYABLE,
@@ -62,14 +67,45 @@ _BY_STATUS: dict[int, ErrorKind] = {
 # Problem codes that override the status mapping. The service knows things the
 # status alone does not — notably that a timeout happened after the effect was
 # applied, which is the whole of S09.
+#
+# `state_conflict` used to be here as RETRYABLE, and it was wrong twice over.
+# It contradicted `problem.py`, which declares the same code `retryable:
+# False`, and it was wrong on its own terms: a refund that conflicts because
+# the capture is already fully refunded conflicts identically on every
+# attempt, so retrying spends the budget to arrive at the same answer. It is
+# FATAL by status now, with no override. The consistency test below is what
+# caught the disagreement and what keeps the two tables in step.
 _BY_CODE: dict[str, ErrorKind] = {
     "upstream_timeout": ErrorKind.INDETERMINATE,
     "idempotency_key_reused": ErrorKind.FATAL,
-    "state_conflict": ErrorKind.RETRYABLE,
     "not_permissible": ErrorKind.NEEDS_HUMAN,
     "illegal_transition": ErrorKind.FATAL,
     "citations_required": ErrorKind.NEEDS_HUMAN,
 }
+
+
+#: The 5xx range, named because the two status classes mean opposite things
+#: here and a bare 500 in a comparison does not say which boundary it is.
+SERVER_ERROR_FLOOR = 500
+SERVER_ERROR_CEILING = 600
+
+
+def _by_status_class(status: int | None) -> ErrorKind:
+    """The default for a status nothing maps explicitly.
+
+    By class rather than by a single fallback, because the two classes mean
+    opposite things. A 5xx is the server's problem and is worth another
+    attempt; a 4xx is the request's problem and repeating it changes nothing.
+
+    The previous `or ErrorKind.FATAL` fallback got that backwards for every
+    unlisted 5xx: a 507 or a 521 was classified as fatal and never retried,
+    which is the one case where a retry would almost certainly have worked.
+    """
+    if status is None:
+        return ErrorKind.FATAL
+    if SERVER_ERROR_FLOOR <= status < SERVER_ERROR_CEILING:
+        return ErrorKind.RETRYABLE
+    return ErrorKind.FATAL
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,7 +181,7 @@ def classify(
 
     problem = problem or {}
     code = str(problem.get("code") or f"http_{status}")
-    kind = _BY_CODE.get(code) or _BY_STATUS.get(status or 0) or ErrorKind.FATAL
+    kind = _BY_CODE.get(code) or _BY_STATUS.get(status or 0) or _by_status_class(status)
 
     return ToolFailure(
         kind=kind,
