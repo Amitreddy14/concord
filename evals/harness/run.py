@@ -30,8 +30,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -56,6 +58,17 @@ from packages.policy.tenant import TenantConfig, load_tenant
 from packages.shared.ledger import InMemoryLedger
 from packages.tools.invoker import ToolInvoker
 from packages.tools.tests.conftest import BASE_URLS, RoutingTransport
+
+#: How the runner obtains a gateway for a scenario. The suite's default is
+#: the prompt-aware stand-in; the benchmark substitutes a real model. Threaded
+#: as a parameter rather than read from the environment, so the two cannot
+#: disagree about which is in use — a benchmark that silently measured the
+#: stand-in would report perfect scores for every model.
+GatewayFactory = Callable[[Scenario], Any]
+
+
+def default_gateway(scenario: Scenario) -> Any:
+    return HarnessGateway(scenario.scenario_id)
 
 
 class NoSleep:
@@ -190,14 +203,17 @@ def _open_ticket(services: dict[str, Any], scenario: Scenario) -> str:
 
 
 async def _build_rig(
-    scenario: Scenario, client: httpx.AsyncClient, services: dict[str, Any]
+    scenario: Scenario,
+    client: httpx.AsyncClient,
+    services: dict[str, Any],
+    gateway_factory: GatewayFactory = default_gateway,
 ) -> Rig:
     load_tenant.cache_clear()
     tenant = load_tenant(scenario.tenant)
     ledger = InMemoryLedger()
     approvals = InMemoryApprovalStore()
     context = NodeContext(
-        gateway=HarnessGateway(scenario.scenario_id),  # type: ignore[arg-type]
+        gateway=gateway_factory(scenario),
         invoker=ToolInvoker(
             tenant=tenant,
             base_urls=dict(BASE_URLS),
@@ -263,7 +279,9 @@ def evaluate(outcome: Outcome, assertions: list[Assertion]) -> list[CheckReport]
     return reports
 
 
-async def run_scenario(scenario: Scenario) -> list[RunReport]:
+async def run_scenario(
+    scenario: Scenario, gateway_factory: GatewayFactory = default_gateway
+) -> list[RunReport]:
     """Every run a scenario asks for: the main one, its repeats, its branches."""
     reports: list[RunReport] = []
     repeats = scenario.repeat_runs
@@ -271,7 +289,9 @@ async def run_scenario(scenario: Scenario) -> list[RunReport]:
 
     for index in range(repeats):
         label = "main" if repeats == 1 else f"repeat {index + 1}"
-        report, signature, rig, run_id, state, paused = await _one_run(scenario, label)
+        report, signature, rig, run_id, state, paused = await _one_run(
+            scenario, label, gateway_factory
+        )
         reports.append(report)
         signatures.append(signature)
 
@@ -300,7 +320,7 @@ async def run_scenario(scenario: Scenario) -> list[RunReport]:
 
 
 async def _one_run(
-    scenario: Scenario, label: str
+    scenario: Scenario, label: str, gateway_factory: GatewayFactory = default_gateway
 ) -> tuple[RunReport, str, Rig, str, dict[str, Any], bool]:
     services = _seed(scenario)
     hosts = {
@@ -309,7 +329,7 @@ async def _one_run(
     started = time.monotonic()
 
     async with httpx.AsyncClient(transport=RoutingTransport(hosts)) as client:
-        rig = await _build_rig(scenario, client, services)
+        rig = await _build_rig(scenario, client, services, gateway_factory)
         run_id = f"run_{scenario.scenario_id.lower()}_{label.replace(' ', '')}"
         config = {"configurable": {"thread_id": f"ticket:{rig.ticket_id}"}}
         ticket = scenario.ticket
@@ -497,6 +517,45 @@ def _decide(rig: Rig, approval_id: str, name: str, branch: dict[str, Any]) -> No
 # ---------------------------------------------------------------------------
 # Reporting
 # ---------------------------------------------------------------------------
+
+
+async def run_scenario_with_model(
+    scenario: Scenario,
+    *,
+    model: str,
+    base_url: str,
+    usage: Any = None,
+) -> list[RunReport]:
+    """One scenario against a real model rather than the stand-in.
+
+    The only substitution is the gateway. Services, fixtures and assertions
+    are the ones `make eval` uses, so a difference between two models in the
+    benchmark table is a difference in the models.
+
+    The usage ledger is shared across scenarios when one is passed, because
+    the benchmark's token columns are per model rather than per scenario.
+    """
+    from packages.shared.llm import OllamaGateway, UsageLedger  # noqa: PLC0415
+
+    shared_usage = usage if usage is not None else UsageLedger()
+    clients: list[httpx.AsyncClient] = []
+
+    def factory(_scenario: Scenario) -> Any:
+        client = httpx.AsyncClient(timeout=300)
+        clients.append(client)
+        return OllamaGateway(
+            base_url=base_url,
+            model=model,
+            client=client,
+            api_key=os.environ.get("LLM_API_KEY", "not-needed-for-local"),
+            usage=shared_usage,
+        )
+
+    try:
+        return await run_scenario(scenario, factory)
+    finally:
+        for client in clients:
+            await client.aclose()
 
 
 def render(reports: list[RunReport]) -> str:

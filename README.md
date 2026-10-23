@@ -107,7 +107,8 @@ infra/          Compose stack, migrations, local bootstrap
 
 ## Status
 
-Phase 7 complete. Phase 8 next. See [docs/roadmap.md](docs/roadmap.md) for the full plan and
+Phase 8 complete except for the model-choice ADR, which is waiting on a benchmark run against
+the target hardware. Phase 9 next. See [docs/roadmap.md](docs/roadmap.md) for the full plan and
 the definition of done for each phase.
 
 | Phase | Title | State |
@@ -120,8 +121,8 @@ the definition of done for each phase.
 | 5 | Multi-agent graph | complete |
 | 6 | Policy, risk tiering, human approval | complete |
 | 7 | Failure engineering | complete |
-| 8 | Evaluation and observability | next |
-| 9 | Tenant onboarding and deployment | not started |
+| 8 | Evaluation and observability | complete (model ADR pending a benchmark run) |
+| 9 | Tenant onboarding and deployment | next |
 
 ---
 

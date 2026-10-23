@@ -27,6 +27,7 @@ from packages.agent.checkpointing import checkpointer as checkpointer_context
 from packages.agent.state import AgentState
 from packages.policy.approval import PROCEEDING
 from packages.policy.engine import Permission
+from packages.shared import telemetry
 
 NodeFn = Callable[[AgentState], Coroutine[Any, Any, dict[str, Any]]]
 
@@ -44,7 +45,12 @@ def build_graph(context: nodes.NodeContext, checkpointer: Any | None = None) -> 
 
     def bind(fn: Callable[..., Coroutine[Any, Any, dict[str, Any]]]) -> NodeFn:
         async def wrapped(state: AgentState) -> dict[str, Any]:
-            return await fn(state, context)
+            # The span is applied here rather than inside each node, so a new
+            # node is traced without its author remembering to — and so the
+            # span name is the graph's name for the node rather than whatever
+            # the function happens to be called.
+            with telemetry.node_span(fn.__name__, run_id=str(state.get("run_id", ""))):
+                return await fn(state, context)
 
         wrapped.__name__ = fn.__name__
         return wrapped
