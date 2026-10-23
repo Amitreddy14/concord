@@ -184,6 +184,18 @@ the tool invoker.
 **Done when** S09 passes under the `hostile` profile across repeated seeded runs with exactly one
 refund every time, and a replayed run reproduces its original decisions.
 
+**Delivered.** Compensation turned out to have three strategies rather than one, and money has
+none of them — the contract has six mutating tools and no inverse for any of them, so
+`ADR 0009` records that the strategy for a refund is prevention, detection and escalation rather
+than an undo. Reconciliation reports three outcomes, not two: `UNKNOWN` is never collapsed into
+`ABSENT`, because the step after `ABSENT` is to try again. The dead-letter queue refuses to
+replay a letter whose effect upstream is unknown, rather than warning about it.
+
+Two defects surfaced while building it. The error taxonomy disagreed with `problem.py` about
+whether `state_conflict` was retryable, and an unlisted 5xx fell through to `FATAL` — so a 507
+was never retried, which is the case where a retry is most likely to work. Both are now covered
+by a test that enumerates every problem code the services can emit rather than sampling.
+
 ---
 
 ## Phase 8 — Evaluation and observability
