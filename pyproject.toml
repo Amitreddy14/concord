@@ -19,6 +19,12 @@ dependencies = [
   # process, which is the one thing ADR 0001 chose LangGraph to prevent.
   "langgraph-checkpoint-postgres>=3.0",
   "psycopg[binary,pool]>=3.2",
+  # Traces. The API and the SDK are separate packages on purpose: a library
+  # importing the API alone adds no exporter and no grpc, which is what lets
+  # the no-collector path stay cheap.
+  "opentelemetry-api>=1.27",
+  "opentelemetry-sdk>=1.27",
+  "opentelemetry-exporter-otlp-proto-grpc>=1.27",
 ]
 
 [project.optional-dependencies]

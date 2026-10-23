@@ -32,6 +32,7 @@ import httpx
 from pydantic import ValidationError
 
 from packages.policy.tenant import TenantConfig
+from packages.shared import telemetry
 from packages.shared.ledger import InMemoryLedger, StepKind, record_step
 from packages.tools import registry
 from packages.tools.breaker import BreakerRegistry, CircuitOpen
@@ -191,24 +192,54 @@ class ToolInvoker:
                 raise ToolError(failure) from open_circuit
 
             try:
-                with record_step(
-                    self.ledger,
-                    run_id=run_id,
-                    node=node,
-                    kind=StepKind.TOOL_CALL,
-                    tool=spec.name,
-                    scope=spec.scope,
-                    attempt=attempt,
-                    request=payload,
-                ) as box:
-                    result = await self._send(
-                        spec,
-                        payload,
+                with (
+                    telemetry.tool_span(
+                        spec.name,
+                        run_id=run_id,
+                        node=node,
+                        service=spec.service,
+                        scope=spec.scope,
                         attempt=attempt,
-                        correlation_id=correlation_id,
-                        idempotency_key=idempotency_key,
-                    )
+                        idempotent=idempotency_key is not None,
+                    ) as span,
+                    record_step(
+                        self.ledger,
+                        run_id=run_id,
+                        node=node,
+                        kind=StepKind.TOOL_CALL,
+                        tool=spec.name,
+                        scope=spec.scope,
+                        attempt=attempt,
+                        request=payload,
+                    ) as box,
+                ):
+                    try:
+                        result = await self._send(
+                            spec,
+                            payload,
+                            attempt=attempt,
+                            correlation_id=correlation_id,
+                            idempotency_key=idempotency_key,
+                        )
+                    except ToolError as failing:
+                        # Marked from inside the span, because by the time
+                        # the exception reaches the handler below both
+                        # context managers have exited and the current span
+                        # is the node's — so the failure would have been
+                        # recorded one level up, on a span that did not fail.
+                        telemetry.record_failure(
+                            span,
+                            kind=str(failing.failure.kind),
+                            code=failing.failure.code,
+                            detail=failing.failure.detail,
+                        )
+                        raise
                     box["output"] = result.data
+                    # Recorded because the question an audit asks is whether
+                    # the system of record created the effect or replayed one
+                    # it already had, and that is invisible from the status
+                    # code alone.
+                    span.set_attribute("concord.replayed", result.replayed)
             except ToolError as error:
                 last_failure = error.failure
                 if last_failure.kind in (ErrorKind.RETRYABLE, ErrorKind.INDETERMINATE):

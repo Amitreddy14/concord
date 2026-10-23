@@ -27,11 +27,18 @@ SKIP_DIRS = {".git", "node_modules", ".venv", "venv", ".mypy_cache", ".ruff_cach
 FIRST_PARTY = {"apps", "packages", "evals", "scripts"}
 
 # Import name to distribution name, where they differ.
+#
+# `opentelemetry` is a namespace package split across several distributions —
+# the API, the SDK and each exporter — and nothing is importable as
+# `opentelemetry_api`. Mapping it to the API is the honest minimum: that is
+# the one every `from opentelemetry import ...` needs, and the SDK and
+# exporter are imported under longer paths that resolve through it.
 IMPORT_TO_DISTRIBUTION = {
     "yaml": "pyyaml",
     "dotenv": "python-dotenv",
     "jose": "python-jose",
     "sqlalchemy": "sqlalchemy",
+    "opentelemetry": "opentelemetry-api",
 }
 
 REQUIREMENT_NAME = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)")

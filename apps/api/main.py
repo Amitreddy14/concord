@@ -45,6 +45,8 @@ from packages.policy.approval import (
     InMemoryApprovalStore,
 )
 from packages.policy.tenant import TenantConfig, load_tenant
+from packages.shared import cost as cost_report
+from packages.shared import telemetry
 from packages.shared.ledger import InMemoryLedger
 from packages.shared.llm import LLMError, LLMGateway, OllamaGateway
 from packages.shared.problem import PROBLEM_CONTENT_TYPE, VALIDATION_FAILED, ProblemError
@@ -257,9 +259,15 @@ async def _drive(run: Run, deps: Dependencies, graph_input: Any) -> None:
     try:
         saver = await deps.checkpointer()
         graph = build_graph(context, saver)
-        async for update in graph.astream(graph_input, config=config):
-            for node, payload in update.items():
-                run.emit("node.completed", node=node, keys=sorted(payload or {}))
+        with telemetry.run_span(
+            run_id=run.run_id,
+            ticket_id=run.ticket_id,
+            tenant_id=run.tenant_id,
+            merchant_id=run.merchant_id,
+        ):
+            async for update in graph.astream(graph_input, config=config):
+                for node, payload in update.items():
+                    run.emit("node.completed", node=node, keys=sorted(payload or {}))
         snapshot = await graph.aget_state(config=config)
         final = dict(snapshot.values)
         paused = bool(snapshot.next)
@@ -299,6 +307,11 @@ async def _drive(run: Run, deps: Dependencies, graph_input: Any) -> None:
         "passages": [p.get("passage_id") for p in final.get("passages") or []],
         "visited": final.get("visited", []),
         "usage": deps.gateway.usage.for_run(run.run_id),
+        # What the run cost in the units that are scarce here: tokens
+        # through a fixed context window, and seconds a merchant waited.
+        "cost": cost_report.for_run(
+            run.run_id, usage=deps.gateway.usage, ledger=deps.ledger
+        ).to_payload(),
     }
 
     if final.get("failure") == "approval_expired":
@@ -344,6 +357,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         client=client,
         api_key=os.environ.get("LLM_API_KEY", "not-needed-for-local"),
     )
+    telemetry.configure()
     app.state.deps = Dependencies(
         tenant=load_tenant(os.environ.get("CONCORD_TENANT", "acme-payments")),
         gateway=gateway,
