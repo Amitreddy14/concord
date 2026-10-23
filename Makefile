@@ -72,7 +72,7 @@ seed: require-python ## Load the scenario fixture dataset into the mock systems
 	$(PY) -m apps.mocks.seed --scenario $${SCENARIO:-S02}
 
 .PHONY: check
-check: lint types contracts yaml money deps test console ## Everything CI runs
+check: lint types contracts yaml money deps test eval console ## Everything CI runs
 
 .PHONY: lint
 lint: require-python ## Lint and format check
@@ -136,7 +136,7 @@ console-build: ## Production build of the console
 
 .PHONY: eval
 eval: require-python ## Run the golden scenario suite
-	$(PY) -m evals.harness.run --suite evals/golden --report evals/reports
+	$(PY) -m evals.harness.run --report evals/reports $(if $(SCENARIO),--scenario $(SCENARIO))
 
 .PHONY: clean
 clean: ## Remove caches and build artifacts
