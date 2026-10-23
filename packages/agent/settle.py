@@ -57,6 +57,11 @@ QUEUE_FOR_INTENT: dict[str, str] = {
     "settlement_query": "settlements",
     "dispute_notice": "disputes",
     "payout_hold_query": "compliance",
+    # A merchant complaining with nothing technically wrong is the case an
+    # agent is worst at and a person is best at. There is nothing to fix, so
+    # "resolved" would close a ticket on a merchant who is still unhappy, and
+    # the only honest action is to put a human in front of them.
+    "complaint_no_action": "general",
 }
 DEFAULT_QUEUE = "general"
 
@@ -137,6 +142,40 @@ async def settle(state: AgentState, context: NodeContext) -> dict[str, Any]:
         )
 
     if outcome == "escalated":
+        # A reviewer's note is the reason this was declined, and the next
+        # person to open the ticket is the one who needs it. Leaving it on
+        # the approval record alone means the handoff arrives without the
+        # one thing that explains it.
+        approval = state.get("approval") or {}
+        if approval.get("reviewer_note"):
+            await attempt(
+                "post_message",
+                {
+                    "ticket_id": ticket_id,
+                    "direction": "internal_note",
+                    "author": str(approval.get("reviewer") or "reviewer"),
+                    "body": str(approval["reviewer_note"]),
+                    "citations": [],
+                },
+            )
+
+        # Assignment escalates an `open` ticket by itself, which is why the
+        # scenarios that escalate from open need only `assign:write`. A
+        # ticket already moved to awaiting_approval is not open, so the
+        # service leaves its status alone and the status has to be set here —
+        # otherwise a declined approval leaves the ticket sitting in
+        # awaiting_approval with nobody waiting on it.
+        if approval.get("status"):
+            await attempt(
+                "set_ticket_status",
+                {
+                    "ticket_id": ticket_id,
+                    "status": "escalated",
+                    "reason": _escalation_reason(state, decision),
+                    "run_id": run_id,
+                },
+            )
+
         queue = _queue_for(state, decision)
         await attempt(
             "assign_ticket",
@@ -196,6 +235,14 @@ def _outcome_of(state: AgentState, decision: dict[str, Any]) -> str:
         return "escalated"
 
     if state.get("status") == "failed":
+        return "escalated"
+
+    approval = state.get("approval") or {}
+    if approval.get("status") in {"rejected", "expired"}:
+        # A reviewer said no, or nobody said anything in time. Either way a
+        # person owns this now: calling it resolved would close a ticket on
+        # which the merchant's request was declined or simply dropped, and
+        # the two need telling apart in the handoff rather than in the status.
         return "escalated"
 
     if (state.get("reply") or {}).get("is_refusal"):
@@ -276,3 +323,44 @@ def _result(outcome: str, problems: list[str], *, queue: str | None = None) -> d
     if problems:
         settled["problems"] = problems
     return {"settled": settled, "visited": ["settle"]}
+
+
+async def mark_pending(state: AgentState, context: NodeContext) -> dict[str, Any]:
+    """Record on the ticket that a human is needed, before the graph pauses.
+
+    Its own node rather than part of `await_approval`, because of ADR 0001:
+    everything above an `interrupt()` runs again on resume, so a node that
+    interrupts must contain nothing that cannot bear repeating. This write
+    can — setting a status to the value it already holds is a no-op in the
+    ticketing service — but keeping it out of the interrupting node means the
+    invariant is structural rather than argued, and the structural test that
+    enforces it stays simple.
+
+    The write is to the ticket, never to money. Nothing here moves anything a
+    reviewer has not yet authorised.
+    """
+    decision = state.get("decision") or {}
+    try:
+        await context.invoker.call(
+            "set_ticket_status",
+            {
+                "ticket_id": str(state["ticket_id"]),
+                "status": "awaiting_approval",
+                "reason": _approval_reason(decision),
+                "run_id": str(state["run_id"]),
+            },
+            run_id=str(state["run_id"]),
+            node="mark_pending",
+        )
+    except ToolError as error:
+        # The approval still exists and the reviewer console still shows it.
+        # A ticket that could not be updated is worth recording and not worth
+        # abandoning the run over.
+        return {
+            "settled": {
+                "outcome": "awaiting_approval",
+                "problems": [f"set_ticket_status: {error.failure.code}"],
+            },
+            "visited": ["mark_pending"],
+        }
+    return {"settled": {"outcome": "awaiting_approval"}, "visited": ["mark_pending"]}
