@@ -23,6 +23,7 @@ from packages.agent.context import NodeContext
 from packages.agent.specialists import specialist_facts
 from packages.agent.state import AgentState, DraftResult, TriageResult
 from packages.agent.structured import generate_structured
+from packages.shared.money import Money
 
 # Per-node context budgets, enforced by the gateway. Deliberately tight: on an
 # 8GB card the resident model's context is the scarce resource, and a node
@@ -153,11 +154,17 @@ async def draft(state: AgentState, context: NodeContext) -> dict[str, Any]:
     passages = state.get("passages") or []
     merchant = state.get("merchant") or {}
 
+    # What this run did, if it did anything. The drafter could not see this
+    # before, so a reply could not report the refund the run had just issued
+    # — it drafted from policy passages and the action was invisible to it.
+    actions = action_facts(state)
+
     facts = "\n".join(
         [
             f"merchant: {merchant.get('display_name', 'unknown')}",
             f"tier: {merchant.get('tier', 'unknown')}",
             *([specialist_facts(state)] if specialist_facts(state) else []),
+            *(["", "[what you have already done for this merchant]", *actions] if actions else []),
             "",
             "[supporting passages]",
             *(f"{p['passage_id']}: {p.get('title', '')} — {p.get('text', '')}" for p in passages),
@@ -201,6 +208,9 @@ async def verify_grounding(state: AgentState, context: NodeContext) -> dict[str,
         draft=draft_result,
         retrieved=passages,
         require_citations=context.require_citations,
+        # Read from state, not from the draft: a drafter inventing a `run:`
+        # citation for a refund that never happened is still caught.
+        self_evident=action_citations(state),
     )
 
     if result.may_send:
@@ -222,3 +232,41 @@ async def verify_grounding(state: AgentState, context: NodeContext) -> dict[str,
         "reply": reply,
         "visited": ["verify"],
     }
+
+
+def action_citations(state: AgentState) -> list[str]:
+    """Citation ids for what this run performed, evidenced by its own ledger.
+
+    The namespace is `run:`, and these ids are assembled here from state
+    rather than accepted from the model, so a drafter cannot mint one.
+    """
+    ids: list[str] = []
+    refund = state.get("refund") or {}
+    if refund.get("refund_id"):
+        ids.append(f"{grounding.SELF_EVIDENT_PREFIX}refund:{refund['refund_id']}")
+    return ids
+
+
+def action_facts(state: AgentState) -> list[str]:
+    """The same actions, rendered for the drafter with their citation ids.
+
+    Amounts come from the system of record's response rather than from the
+    proposal, so the reply states what was actually refunded — which is what
+    a reviewer modifying an amount makes different from what was asked for.
+    """
+    facts: list[str] = []
+    refund = state.get("refund") or {}
+    if refund.get("refund_id"):
+        try:
+            amount = Money.from_payload(refund["amount"]).format()
+        except (KeyError, TypeError, ValueError):
+            amount = "an amount recorded on the refund"
+        replayed = state.get("refund_replayed")
+        facts.append(
+            f"{grounding.SELF_EVIDENT_PREFIX}refund:{refund['refund_id']}: a refund of "
+            f"{amount} has been issued against capture "
+            f"{refund.get('capture_id', 'unknown')}"
+            + (" (this was already in flight; it has not been issued twice)" if replayed else "")
+            + ". Cite this id when you tell the merchant about it."
+        )
+    return facts
