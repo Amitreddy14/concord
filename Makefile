@@ -138,6 +138,13 @@ console-build: ## Production build of the console
 eval: require-python ## Run the golden scenario suite
 	$(PY) -m evals.harness.run --report evals/reports $(if $(SCENARIO),--scenario $(SCENARIO))
 
+.PHONY: benchmark
+benchmark: require-python ## Benchmark the local model shortlist (needs a GPU and Ollama)
+	$(PY) -m evals.harness.benchmark \
+		$(if $(MODELS),--models $(MODELS)) \
+		$(if $(SCENARIOS),--scenarios $(SCENARIOS)) \
+		--report evals/reports
+
 .PHONY: clean
 clean: ## Remove caches and build artifacts
 	find . -type d -name __pycache__ -prune -exec rm -rf {} +
