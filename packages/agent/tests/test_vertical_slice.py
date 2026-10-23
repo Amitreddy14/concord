@@ -40,19 +40,36 @@ class TestScenario01:
             "retrieve",
             "draft",
             "verify",
+            # The reply is recorded on the ticket. Without this the run ends
+            # with an answer in memory and an untouched `open` ticket, which
+            # is what S01's `ticket_status_is: resolved` has always asked for
+            # and nothing used to do.
+            "settle",
         ]
         assert final["triage"]["intent"] == "status_question"
         assert final["merchant"]["merchant_id"] == "M-1001"
 
-    async def test_no_mutating_tool_is_called(self, context: NodeContext) -> None:
-        # S01's first hard assertion: a policy question must not cause a write.
+    async def test_no_mutating_tool_is_called_beyond_the_ticket(self, context: NodeContext) -> None:
+        """S01's first hard assertion, with the exception its own fixture lists.
+
+        A policy question must not move money or change an account. Recording
+        the answer on the ticket it answers is a different thing, and the
+        fixture now says so explicitly — as S07 and S12 always did.
+        """
         graph = build_graph(context, MemorySaver())
         await graph.ainvoke(initial_state(**S01), config={"configurable": {"thread_id": "t1"}})
 
         from packages.tools import registry
 
         called = {s.tool for s in context.invoker.ledger.tool_calls("run_s01")}
-        assert called.isdisjoint(set(registry.mutating_tools()))
+        ticket_lifecycle = {"set_ticket_status", "post_message"}
+        assert called.isdisjoint(set(registry.mutating_tools()) - ticket_lifecycle)
+
+        # And nothing in the ticket's own lifecycle stands in for the ones
+        # that matter: no refund, no note, no assignment.
+        assert "create_refund" not in called
+        assert "add_merchant_note" not in called
+        assert "assign_ticket" not in called
 
     async def test_the_reply_is_cited(self, context: NodeContext) -> None:
         graph = build_graph(context, MemorySaver())
@@ -77,7 +94,15 @@ class TestScenario01:
         await graph.ainvoke(initial_state(**S01), config={"configurable": {"thread_id": "t4"}})
 
         used = context.invoker.ledger.scopes_used("run_s01")
-        assert used == {"crm:merchant:read", "knowledge:search"}
+        assert used == {
+            "crm:merchant:read",
+            "knowledge:search",
+            # Recording the answer on the ticket. Enumerated rather than
+            # loosened to a subset check, so a scope this run has no business
+            # using still fails here.
+            "ticketing:ticket:write",
+            "ticketing:message:write",
+        }
         assert used <= set(context.invoker.tenant.tool_scopes)
 
 
@@ -101,6 +126,11 @@ class TestSurvivingAnEvictedModel:
             "retrieve",
             "draft",
             "verify",
+            # The reply is recorded on the ticket. Without this the run ends
+            # with an answer in memory and an untouched `open` ticket, which
+            # is what S01's `ticket_status_is: resolved` has always asked for
+            # and nothing used to do.
+            "settle",
         ]
         assert final["draft"]["citations"] == ["psg_refund-policy.v3.credit-timelines"]
 

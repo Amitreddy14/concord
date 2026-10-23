@@ -190,6 +190,8 @@ async def disputes(state: AgentState, context: NodeContext) -> dict[str, Any]:
     chargebacks = open_disputes.data.get("items", [])
 
     packet: dict[str, Any] = {"chargebacks": chargebacks}
+    payment: dict[str, Any] | None = None
+
     if chargebacks:
         capture_id = chargebacks[0].get("capture_id")
         if capture_id:
@@ -201,10 +203,18 @@ async def disputes(state: AgentState, context: NodeContext) -> dict[str, Any]:
                     node="disputes",
                 )
                 packet["capture"] = capture.data
+                payment = await _payment_for(capture.data, state, context)
             except ToolError:
                 # A missing capture is worth recording and not worth failing
                 # the run over: the deadline still has to reach a human.
                 packet["capture"] = None
+
+    # The four things a human contesting a chargeback has to send the issuer,
+    # named the way the dispute process names them. Assembling them here is
+    # the whole value of this node: the deadline is days away and a human
+    # should not spend one of them gathering ids.
+    packet["authorization_trail"] = _authorization_trail(packet.get("capture"), payment)
+    packet["delivery_reference"] = _delivery_reference(packet.get("capture"), payment)
 
     history = await context.invoker.call(
         "get_contact_history",
@@ -214,7 +224,80 @@ async def disputes(state: AgentState, context: NodeContext) -> dict[str, Any]:
     )
     packet["prior_contacts"] = history.data.get("items", [])
 
-    return {"evidence_packet": packet, "visited": ["disputes"]}
+    # Every dispute this merchant has had, not only the open one. An issuer
+    # weighs a first chargeback differently from a fifth, and a human
+    # answering this needs to know which they are writing about.
+    try:
+        all_disputes = await context.invoker.call(
+            "search_chargebacks",
+            {"merchant_id": state["merchant_id"]},
+            run_id=state["run_id"],
+            node="disputes",
+        )
+        packet["prior_dispute_history"] = all_disputes.data.get("items", [])
+    except ToolError:
+        packet["prior_dispute_history"] = chargebacks
+
+    return {
+        "evidence_packet": packet,
+        "chargebacks": chargebacks,
+        "visited": ["disputes"],
+    }
+
+
+async def _payment_for(
+    capture: dict[str, Any], state: AgentState, context: NodeContext
+) -> dict[str, Any] | None:
+    payment_id = capture.get("payment_id")
+    if not payment_id:
+        return None
+    try:
+        result = await context.invoker.call(
+            "get_payment",
+            {"payment_id": str(payment_id)},
+            run_id=state["run_id"],
+            node="disputes",
+        )
+    except ToolError:
+        return None
+    return dict(result.data)
+
+
+def _authorization_trail(
+    capture: dict[str, Any] | None, payment: dict[str, Any] | None
+) -> dict[str, Any]:
+    """When the card was authorised and under which gateway reference.
+
+    The issuer's first question about a disputed card payment, and the
+    answer is spread across the payment and the capture rather than sitting
+    in one field.
+    """
+    capture = capture or {}
+    payment = payment or {}
+    return {
+        "payment_id": payment.get("payment_id") or capture.get("payment_id"),
+        "authorized_at": payment.get("authorized_at"),
+        "captured_at": capture.get("captured_at"),
+        "gateway_reference": capture.get("gateway_reference"),
+        "method": payment.get("method"),
+    }
+
+
+def _delivery_reference(
+    capture: dict[str, Any] | None, payment: dict[str, Any] | None
+) -> dict[str, Any]:
+    """What ties the payment to something the buyer received.
+
+    The merchant's own order reference and the buyer reference the gateway
+    holds. Neither proves delivery on its own, and saying so is more use to
+    a human than a field called `delivery_reference` that implies it does.
+    """
+    payment = payment or {}
+    return {
+        "order_ref": payment.get("order_ref"),
+        "buyer_reference": payment.get("buyer_reference"),
+        "note": "identifiers only; proof of delivery is the merchant's to supply",
+    }
 
 
 async def account(state: AgentState, context: NodeContext) -> dict[str, Any]:

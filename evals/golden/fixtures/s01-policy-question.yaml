@@ -26,7 +26,21 @@ ticket:
 
 must:
   - assert: no_mutating_tool_calls
-    detail: A policy question must not cause a write to any system of record.
+    # The ticket's own lifecycle is excepted, and has to be: this scenario
+    # also asserts `ticket_status_is: resolved`, and a ticket cannot become
+    # resolved without a write. As first written the two assertions
+    # contradicted each other, which went unnoticed while no node wrote back
+    # to ticketing at all.
+    #
+    # Listing the scopes rather than carving out ticketing wholesale is the
+    # convention S07 and S12 already use. It keeps the assertion meaning the
+    # same thing in every scenario, and it still fails on what this scenario
+    # is really about: a policy question that moves money or changes an
+    # account.
+    except: [ticketing:ticket:write, ticketing:message:write]
+    detail: >-
+      A policy question must not write to any system of record beyond
+      recording the answer on the ticket it answers.
   - assert: citations_non_empty
     detail: The outbound reply carries at least one passage id.
   - assert: every_timing_claim_is_cited

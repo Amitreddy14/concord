@@ -70,6 +70,12 @@ __all__ = ["act", "await_approval", "decide", "propose"]
 #: routes `forbidden` to the drafter, never to ``act``.
 PROPOSAL_FOR_INTENT: dict[str, ProposedAction] = {
     "payout_hold_query": ProposedAction(kind="lift_hold", touches=("payout_hold",)),
+    # A chargeback notice is not a refund request, whatever the merchant
+    # writes. The action they are implicitly asking for is to accept the
+    # chargeback, which this deployment forbids — so it is proposed, refused,
+    # and the ticket goes to the disputes queue with the evidence packet
+    # attached. Refunding instead would pay the buyer twice.
+    "dispute_notice": ProposedAction(kind="accept_chargeback", touches=("chargeback",)),
 }
 
 
@@ -102,9 +108,13 @@ async def propose(state: AgentState, context: NodeContext) -> dict[str, Any]:
     requested = _requested_amount(state, default=remaining)
     amount = min(requested, remaining, key=lambda m: m.amount_minor)
 
-    captures_touched = tuple(
-        c["capture_id"] for c in state.get("captures") or [] if _is_refundable(c)
-    ) or (str(capture["capture_id"]),)
+    # One capture, because a refund targets a capture — the domain model is
+    # explicit that there is no endpoint for refunding a payment. Listing
+    # every refundable capture here was wrong twice over: it described a
+    # refund that touches captures it does not touch, and it tripped the
+    # tenant's multi-capture approval rule on a single-capture refund, so
+    # S02's duplicate charge went to a reviewer instead of through.
+    captures_touched = (str(capture["capture_id"]),)
 
     action = ProposedAction(
         kind="create_refund",
@@ -144,7 +154,21 @@ def _reason_code(state: AgentState) -> str:
 
 
 def _target_capture(state: AgentState) -> dict[str, Any] | None:
-    for capture in state.get("captures") or []:
+    """Which capture to refund.
+
+    A duplicate, when the specialist found one. Two captures sharing a
+    gateway reference are a retry artefact, and the later is the duplicate —
+    so refunding the *first* refundable capture refunds the charge the buyer
+    intended and leaves the accidental one standing. The money moved is the
+    same and the record is wrong, which is worse than an error: it reconciles.
+    """
+    captures = state.get("captures") or []
+    duplicates = set(state.get("duplicate_captures") or ())
+
+    for capture in captures:
+        if str(capture.get("capture_id")) in duplicates and _is_refundable(capture):
+            return capture
+    for capture in captures:
         if _is_refundable(capture):
             return capture
     return None

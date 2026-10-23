@@ -127,6 +127,11 @@ class AgentState(TypedDict, total=False):
     approval: dict[str, Any]
     refund: dict[str, Any]
     refund_replayed: bool
+    settled: dict[str, Any]
+    """What the settle node recorded on the ticket: the outcome, the queue it
+    was assigned to, and any write that failed. Declared here because
+    LangGraph drops keys the schema does not name — the node returned this
+    for a while and the state never carried it."""
     reconciliation: dict[str, Any]
     """What a read of the system of record said after an indeterminate
     mutation. Present only when a refund call failed and the truth had to

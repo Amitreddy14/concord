@@ -23,6 +23,7 @@ that blocks a send. The gate checks facts.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
@@ -61,23 +62,43 @@ class GroundingResult:
         }
 
 
+#: The namespace for a claim evidenced by the run's own ledger rather than
+#: by the knowledge corpus. "I have refunded ₹1,999" is not a policy claim
+#: and no passage supports it; what supports it is that this run did it, and
+#: the ledger records that more firmly than any corpus could.
+#:
+#: Without this, a reply stating what the run just did had to either cite a
+#: passage that does not mention it — a fabricated reference — or go
+#: uncited and be refused. S09 asks for a reply that reports its refund, and
+#: both of those produce a reply that does not.
+SELF_EVIDENT_PREFIX = "run:"
+
+
 def verify(
     *,
     draft: dict[str, Any],
     retrieved: list[dict[str, Any]],
     require_citations: bool,
+    self_evident: Sequence[str] = (),
 ) -> GroundingResult:
-    """Decide whether a draft may be sent."""
+    """Decide whether a draft may be sent.
+
+    ``self_evident`` names citations the run itself evidences — the refund it
+    issued, the ticket it escalated. They are supplied by the caller from
+    state rather than accepted on the model's word, so a drafter inventing a
+    `run:` citation is still caught.
+    """
     citations = list(draft.get("citations") or [])
     unsupported = list(draft.get("unsupported_claims") or [])
     problems: list[str] = []
 
     by_id = {p["passage_id"]: p for p in retrieved}
+    permitted_self_evident = set(self_evident)
 
     # A citation naming something that was never retrieved is the clearest
     # signal of a fabricated reference: the model produced an id that looks
     # plausible for a corpus it did not see.
-    unknown = [c for c in citations if c not in by_id]
+    unknown = [c for c in citations if c not in by_id and c not in permitted_self_evident]
     if unknown:
         problems.append(f"cited passages that were not retrieved: {', '.join(sorted(unknown))}")
 
@@ -96,7 +117,7 @@ def verify(
     if unsupported:
         problems.append(f"claims the drafter could not ground: {len(unsupported)}")
 
-    if not retrieved:
+    if not retrieved and not permitted_self_evident:
         return GroundingResult(
             GroundingVerdict.UNSUPPORTED,
             problems=["no passage in the corpus supports an answer to this question"],

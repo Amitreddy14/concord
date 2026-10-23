@@ -22,6 +22,7 @@ from typing import Any
 from langgraph.graph import END, START, StateGraph
 
 from packages.agent import gate, nodes, specialists
+from packages.agent import settle as settle_node
 from packages.agent.checkpointing import checkpointer as checkpointer_context
 from packages.agent.state import AgentState
 from packages.policy.approval import PROCEEDING
@@ -58,6 +59,8 @@ def build_graph(context: nodes.NodeContext, checkpointer: Any | None = None) -> 
         ("act", gate.act),
         ("draft", nodes.draft),
         ("verify", nodes.verify_grounding),
+        ("settle", settle_node.settle),
+        ("mark_pending", settle_node.mark_pending),
     )
     for name, fn in core:
         builder.add_node(name, bind(fn))  # type: ignore[call-overload]
@@ -76,12 +79,15 @@ def build_graph(context: nodes.NodeContext, checkpointer: Any | None = None) -> 
     )
 
     # A specialist that resolved a question — an ambiguous reference, a
-    # payment that does not exist — has finished the run.
+    # payment that does not exist — has finished the work, but not the run:
+    # the question still has to reach the merchant, so it goes to settle
+    # rather than to END. A reply that never leaves the graph is a reply the
+    # merchant never got.
     for name in specialists.SPECIALISTS:
         builder.add_conditional_edges(
             name,
             _specialist_next,
-            {"retrieve": "retrieve", "end": END},
+            {"retrieve": "retrieve", "settle": "settle"},
         )
 
     # Retrieval grounds the reply. A run that is going to move money goes
@@ -94,11 +100,16 @@ def build_graph(context: nodes.NodeContext, checkpointer: Any | None = None) -> 
     )
 
     builder.add_conditional_edges("propose", _has_proposal, {"decide": "decide", "draft": "draft"})
+    # A decision needing a human marks the ticket before the graph pauses.
+    # Without that hop the run stops at the gate and the ticket stays `open`,
+    # so nothing anywhere says a refund is waiting on someone — which is what
+    # S04's `ticket_status_is: awaiting_approval` has always asked for.
     builder.add_conditional_edges(
         "decide",
         _after_decision,
-        {"act": "act", "await_approval": "await_approval", "draft": "draft"},
+        {"act": "act", "mark_pending": "mark_pending", "draft": "draft"},
     )
+    builder.add_edge("mark_pending", "await_approval")
 
     # The gate's two exits. An approved or modified proposal proceeds to the
     # one node that mutates; a rejection or an expiry goes straight to the
@@ -109,20 +120,26 @@ def build_graph(context: nodes.NodeContext, checkpointer: Any | None = None) -> 
     builder.add_edge("act", "draft")
 
     builder.add_edge("draft", "verify")
-    builder.add_edge("verify", END)
+    builder.add_edge("verify", "settle")
+    builder.add_edge("settle", END)
 
     return builder.compile(checkpointer=checkpointer)
 
 
 def _specialist_next(state: AgentState) -> str:
     """Stop if the specialist already produced the run's reply."""
-    return "end" if state.get("reply") else "retrieve"
+    return "settle" if state.get("reply") else "retrieve"
 
 
 # Intents that can end in money moving. Everything else skips the refund path
 # rather than proposing an action and having it refused: a status question has
 # nothing to propose.
-REFUND_INTENTS = frozenset({"refund_request", "complaint_no_action", "dispute_notice"})
+# `dispute_notice` is deliberately absent: a chargeback notice proposes
+# accepting the chargeback, which is forbidden, rather than a refund.
+# `complaint_no_action` too: a complaint about service is not a request
+# for money, and proposing a refund for one would be the agent inventing
+# a remedy nobody asked for.
+REFUND_INTENTS = frozenset({"refund_request"})
 
 
 def _after_retrieval(state: AgentState) -> str:
@@ -157,7 +174,7 @@ def _after_decision(state: AgentState) -> str:
     if permission == str(Permission.PERMITTED):
         return "act"
     if permission == str(Permission.NEEDS_APPROVAL):
-        return "await_approval"
+        return "mark_pending"
     return "draft"
 
 

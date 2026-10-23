@@ -102,6 +102,17 @@ jobs:
       - name: Run the test suite
         run: make test
 
+      # The merge gate. Every hard assertion in every golden fixture, and
+      # the suite's own acceptance tests — the ones that inject a widened
+      # scope, a skipped approval gate and a dropped citation, and fail if
+      # the suite does not notice. A gate nobody has watched fail is a gate
+      # nobody knows works.
+      - name: Run the golden scenario suite
+        run: make eval
+
+      - name: Confirm the suite catches injected regressions
+        run: make test PYTEST_ARGS="evals/harness/tests -q"
+
       # A skipped test is not a passing test. The durable path is the one
       # most likely to rot unnoticed, so CI asserts it actually ran.
       - name: Confirm the durable checkpointer tests were not skipped

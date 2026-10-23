@@ -214,8 +214,14 @@ class TestScenario02:
     async def test_no_money_moves_in_phase_5(
         self, scenarios: dict[str, Scenario], tenant: TenantConfig
     ) -> None:
-        # The specialist assembles facts; executing the refund is phase 6
-        # behind the policy engine and the approval gate.
+        # Written in phase 5, when executing a refund was still ahead: the
+        # specialist assembled facts and nothing moved money, so the
+        # assertion was that nothing mutating was called at all.
+        #
+        # Phases 6 and 8 made that obsolete rather than wrong. S02's own
+        # fixture asks for exactly one refund — the duplicate capture — so
+        # the invariant worth asserting now is that the agent refunds that
+        # one and touches nothing else about the account.
         _, invoker = await run_graph(
             scenarios["S02"],
             tenant,
@@ -226,7 +232,12 @@ class TestScenario02:
         from packages.tools import registry
 
         called = {s.tool for s in invoker.ledger.tool_calls("run_S02")}
-        assert called.isdisjoint(set(registry.mutating_tools()))
+        ticket_bookkeeping = {"set_ticket_status", "post_message", "assign_ticket", "flag_ticket"}
+        permitted = {"create_refund"} | ticket_bookkeeping
+        assert called.isdisjoint(set(registry.mutating_tools()) - permitted)
+
+        # And nothing touched the merchant's account record.
+        assert "add_merchant_note" not in called
 
 
 class TestScenario07:

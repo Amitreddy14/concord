@@ -85,6 +85,9 @@ class TestSubmission:
             "retrieve",
             "draft",
             "verify",
+            # The answer is recorded on the ticket. A run that ends at
+            # `verify` has produced a reply nobody receives.
+            "settle",
         ]
         assert run.result["reply"]["citations"] == ["psg_refund-policy.v3.credit-timelines"]
         assert run.result["reply"]["is_refusal"] is False
@@ -101,7 +104,15 @@ class TestSubmission:
         assert kinds[0] == "run.started"
         assert kinds[-1] == "run.finished"
         nodes = [e.detail["node"] for e in run.events if e.kind == "node.completed"]
-        assert nodes == ["triage", "gather", "knowledge_only", "retrieve", "draft", "verify"]
+        assert nodes == [
+            "triage",
+            "gather",
+            "knowledge_only",
+            "retrieve",
+            "draft",
+            "verify",
+            "settle",
+        ]
 
     async def test_a_failure_becomes_a_terminal_state_not_a_lost_task(self, deps: Any) -> None:
         # A background task that dies silently is worse than one that fails
@@ -151,7 +162,8 @@ class TestStreaming:
         await task
 
         assert "run.started" in seen
-        assert seen.count("node.completed") == 6
+        # Seven nodes: the six that produce the answer, plus `settle`.
+        assert seen.count("node.completed") == 7
 
     async def test_a_disconnecting_subscriber_does_not_stall_the_run(self, deps: Any) -> None:
         run = deps.store.create(
@@ -193,7 +205,14 @@ class TestEndpoints:
             steps = client.get(f"/runs/{run_id}/steps").json()
 
         assert steps["run_id"] == run_id
-        assert set(steps["scopes_used"]) <= {"crm:merchant:read", "knowledge:search"}
+        assert set(steps["scopes_used"]) <= {
+            "crm:merchant:read",
+            "knowledge:search",
+            # Recording the answer on the ticket it answers. Still a subset
+            # check, so a scope this run has no business using fails here.
+            "ticketing:ticket:write",
+            "ticketing:message:write",
+        }
 
     def test_the_stream_endpoint_emits_sse(self, deps: Any) -> None:
         app = create_app(deps=deps)
