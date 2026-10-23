@@ -212,6 +212,22 @@ by a test that enumerates every problem code the services can emit rather than s
 **Done when** CI fails on an injected regression — a widened scope, a skipped gate, a dropped
 citation — and the benchmark table is reproducible from a single command.
 
+**Delivered.** The harness found five defects on its first full run, which was the point of
+building it: nothing wrote back to the ticket and nothing created it, a duplicate charge refunded
+the capture the buyer intended rather than the accidental one, `captures_touched` reported captures
+a refund did not touch (tripping the multi-capture approval rule on a single-capture refund), and a
+chargeback notice proposed a refund that would have paid the buyer twice. Two fixtures also
+contradicted themselves — S01 and S12 each forbade a scope their own assertions required — and are
+corrected with the reasoning recorded in the fixture.
+
+CI runs the suite and the three injected regressions. The widened-scope regression needed the
+check rewritten: it validated scopes against the registry, so when the regression changed a tool's
+declared scope the expectation moved with it and the check passed. It now pins its own table.
+
+`make benchmark` is the single command, and it is not in CI: it needs a GPU and minutes per model,
+and a merge gate that depended on hardware would break when the hardware is busy. The model-choice
+ADR is written from a run against the target card rather than from an assumption.
+
 ---
 
 ## Phase 9 — Tenant onboarding and deployment
