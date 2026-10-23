@@ -12,6 +12,7 @@ the run store and the checkpointer to Postgres.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -142,6 +143,38 @@ def _context_for(deps: Dependencies) -> NodeContext:
         min_passage_score=deps.tenant.grounding.get("min_passage_score"),
         approvals=deps.approvals,
     )
+
+
+async def open_ticket(deps: Dependencies, submission: SubmitTicket) -> str:
+    """Create the ticket in the ticketing system of record, and return its id.
+
+    Intake, not agent work. There is deliberately no `create_ticket` tool:
+    the agent works tickets and does not open them, so giving it that scope
+    would widen what an injected instruction could reach for.
+
+    This was missing, and the gap was invisible until a node tried to write
+    back. A run carried a `ticket_id` that existed nowhere, so every write to
+    it would have failed with a 404 — and the fixtures have asserted the
+    resulting ticket status since phase 0.
+    """
+    response = await deps.client.post(
+        f"{deps.base_urls['ticketing']}/tickets",
+        json={
+            "merchant_id": submission.merchant_id,
+            "channel": submission.channel,
+            "subject": submission.subject,
+            "body": submission.body,
+        },
+        headers={"Idempotency-Key": f"intake:{submission.merchant_id}:{hash_of(submission)}"},
+    )
+    response.raise_for_status()
+    return str(response.json()["ticket_id"])
+
+
+def hash_of(submission: SubmitTicket) -> str:
+    """A stable key for this submission, so a retried intake is one ticket."""
+    material = json.dumps(submission.model_dump(), sort_keys=True, separators=(",", ":"))
+    return hashlib.blake2b(material.encode(), digest_size=8).hexdigest()
 
 
 async def execute(run: Run, deps: Dependencies, submission: SubmitTicket) -> None:
@@ -371,8 +404,13 @@ def create_app(deps: Dependencies | None = None) -> FastAPI:
         deps: Annotated[Dependencies, Depends(get_dependencies)],
         submission: Annotated[SubmitTicket, Body()],
     ) -> dict[str, Any]:
+        # The ticket is opened in the system of record first, and the run
+        # adopts its id. A run whose ticket_id names nothing cannot record
+        # its own outcome, which is how the graph came to finish with the
+        # answer in memory and the ticket still `open`.
+        ticket_id = submission.ticket_id or await open_ticket(deps, submission)
         run = deps.store.create(
-            ticket_id=submission.ticket_id or f"tkt_{submission.merchant_id.lower()}",
+            ticket_id=ticket_id,
             tenant_id=deps.tenant.tenant_id,
             merchant_id=submission.merchant_id,
         )
