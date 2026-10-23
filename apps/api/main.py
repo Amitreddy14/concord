@@ -27,9 +27,15 @@ from langgraph.types import Command
 from pydantic import BaseModel, ConfigDict, Field
 
 from apps.api import approvals as approval_logic
+from apps.api import deadletters as dead_letter_routes
 from apps.api.runs import Run, RunStatus, RunStore
 from packages.agent.checkpointing import checkpointer as checkpointer_context
 from packages.agent.checkpointing import thread_id_for
+from packages.agent.deadletter import (
+    DeadLetterQueue,
+    InMemoryDeadLetterQueue,
+    from_failed_run,
+)
 from packages.agent.graph import build_graph, initial_state
 from packages.agent.nodes import NodeContext
 from packages.agent.structured import StructuredOutputError
@@ -65,6 +71,10 @@ class Dependencies:
     client: httpx.AsyncClient
     ledger: InMemoryLedger
     store: RunStore
+    dead_letters: DeadLetterQueue = field(default_factory=InMemoryDeadLetterQueue)
+    """Where terminally failed runs land. A run that fails has to end up
+    somewhere a person will find it; a log line and a status column satisfy
+    the letter of that and not the spirit."""
     approvals: ApprovalStore = field(default_factory=InMemoryApprovalStore)
     """Shared by the graph and the API. One store, because the node that
     pauses and the endpoint that answers are looking at the same queue — two
@@ -162,6 +172,37 @@ async def resume_run(run: Run, deps: Dependencies, *, approval_id: str) -> None:
     await _drive(run, deps, Command(resume={"approval_id": approval_id}))
 
 
+async def replay_dead_letter(letter: Any, deps: Dependencies, *, replay_run_id: str) -> None:
+    """Re-run a failed run from what it had established.
+
+    Seeded from the letter's captured state rather than from the ticket, so
+    the reads that already succeeded are not repeated against systems that
+    were having a bad day — and so the replay reaches the same decisions for
+    the same reasons.
+
+    The run id is new. The original keeps its ledger and its letter, because
+    a replay is a second attempt rather than a revision of the first, and an
+    operator comparing them needs both.
+    """
+    run = deps.store.create(
+        ticket_id=letter.ticket_id,
+        tenant_id=letter.tenant_id,
+        merchant_id=letter.merchant_id,
+    )
+    run.emit("run.replaying", of=letter.run_id, letter=letter.letter_id)
+
+    state = dict(letter.state)
+    state["run_id"] = run.run_id
+    # Cleared deliberately: the failure is what is being retried, and
+    # carrying it forward would make the replayed run look failed before it
+    # has done anything.
+    state["status"] = "running"
+    state["failure"] = None
+    state.pop("reconciliation", None)
+
+    await _drive(run, deps, state)
+
+
 async def _drive(run: Run, deps: Dependencies, graph_input: Any) -> None:
     """Run the graph to its next stopping point.
 
@@ -234,9 +275,31 @@ async def _drive(run: Run, deps: Dependencies, graph_input: Any) -> None:
         run.finish(RunStatus.ABANDONED, reason="approval expired without a decision")
         return
     if final.get("status") == "failed":
-        run.finish(RunStatus.FAILED, reason=final.get("failure") or "run failed")
+        reason = final.get("failure") or "run failed"
+        _dead_letter(run, deps, final, reason)
+        run.finish(RunStatus.FAILED, reason=reason)
         return
     run.finish(RunStatus.COMPLETED)
+
+
+def _dead_letter(run: Run, deps: Dependencies, final: dict[str, Any], reason: str) -> None:
+    """File a failed run where an operator will see it.
+
+    The whole accumulated state goes in, not a summary: a replay starts from
+    what the run established rather than from the ticket, so the reads that
+    already succeeded are not repeated against systems that were having a bad
+    day.
+    """
+    deps.dead_letters.add(
+        from_failed_run(
+            run_id=run.run_id,
+            ticket_id=run.ticket_id,
+            tenant_id=deps.tenant.tenant_id,
+            merchant_id=run.merchant_id,
+            failure=reason,
+            state=final,
+        )
+    )
 
 
 @asynccontextmanager
@@ -392,6 +455,13 @@ def create_app(deps: Dependencies | None = None) -> FastAPI:
             get_deps=get_dependencies,
             resume=resume_run,
             sweep=_sweep,
+            background=_BACKGROUND,
+        )
+    )
+    app.include_router(
+        dead_letter_routes.build_router(
+            get_deps=get_dependencies,
+            replay=replay_dead_letter,
             background=_BACKGROUND,
         )
     )
