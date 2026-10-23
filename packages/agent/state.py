@@ -127,6 +127,10 @@ class AgentState(TypedDict, total=False):
     approval: dict[str, Any]
     refund: dict[str, Any]
     refund_replayed: bool
+    reconciliation: dict[str, Any]
+    """What a read of the system of record said after an indeterminate
+    mutation. Present only when a refund call failed and the truth had to
+    be established rather than assumed."""
     proposal_note: str
 
     # Control

@@ -44,6 +44,13 @@ from packages.policy.approval import (
 from packages.policy.engine import Decision, Permission, ProposedAction, evaluate
 from packages.shared.ledger import RunStep, StepKind, StepOutcome
 from packages.shared.money import Money
+from packages.tools.errors import ToolError
+from packages.tools.reconcile import (
+    Reconciliation,
+    Resolution,
+    needs_reconciliation,
+    reconcile_refund,
+)
 
 __all__ = ["act", "await_approval", "decide", "propose"]
 
@@ -238,7 +245,7 @@ def _record_decision(context: NodeContext, state: AgentState, decision: Decision
         # The inputs are a payload rather than columns: which facts a decision
         # turned on depends on which rule fired, and a schema that pinned them
         # would need changing every time the engine records one more.
-        payloads={"request": decision.inputs, "response": decision.to_payload()},
+        payloads={"input": decision.inputs, "output": decision.to_payload()},
     )
 
 
@@ -260,7 +267,7 @@ def _record_approval(
             policy_rule_id=request.decision.get("rule_id"),
             detail=f"{request.status} by {request.reviewer or 'nobody'}",
         ),
-        payloads={"response": request.to_review_payload()},
+        payloads={"output": request.to_review_payload()},
     )
 
 
@@ -412,12 +419,14 @@ async def act(state: AgentState, context: NodeContext) -> dict[str, Any]:
         "initiated_by": initiated_by,
         "approval_id": approval.get("approval_id"),
     }
-    result = await context.invoker.call(
-        "create_refund",
-        arguments,
-        run_id=str(state["run_id"]),
-        node="act",
-    )
+    run_id = str(state["run_id"])
+    try:
+        result = await context.invoker.call("create_refund", arguments, run_id=run_id, node="act")
+    except ToolError as error:
+        return await _after_a_failed_refund(
+            context, state, error=error, arguments=arguments, run_id=run_id
+        )
+
     return {
         "refund": result.data,
         # `replayed` says the system of record returned a stored response
@@ -428,3 +437,94 @@ async def act(state: AgentState, context: NodeContext) -> dict[str, Any]:
         "status": "running",
         "visited": ["act"],
     }
+
+
+async def _after_a_failed_refund(
+    context: NodeContext,
+    state: AgentState,
+    *,
+    error: ToolError,
+    arguments: dict[str, Any],
+    run_id: str,
+) -> dict[str, Any]:
+    """The invoker has exhausted its attempts. Did the money move?
+
+    Nothing in this run can answer that from memory: a timeout after the
+    request was accepted looks exactly like a timeout before it was received.
+    So the question goes to the system of record rather than to a guess.
+
+    All three answers are terminal here. Even ABSENT — the refund demonstrably
+    did not happen — does not retry, because the invoker already spent its
+    attempts and a fresh one from this node would be a second retry budget
+    nobody granted.
+    """
+    if not needs_reconciliation(error.failure, mutating=True):
+        # A FATAL is the dependency telling us something true; a
+        # POISONED_INPUT never reached the network. Neither leaves anything
+        # upstream to find, so there is nothing to reconcile and the failure
+        # stands as reported.
+        raise error
+
+    found = await reconcile_refund(
+        context.invoker,
+        run_id=run_id,
+        node="act",
+        arguments=arguments,
+        capture_id=str(arguments["capture_id"]),
+    )
+    _record_reconciliation(context, state, found)
+
+    if found.resolution is Resolution.LANDED:
+        # The refund exists upstream. The call failed and the effect
+        # happened, which is the case a naive implementation reports as a
+        # failure while the merchant's money is already on its way.
+        return {
+            "refund": found.effect,
+            "refund_replayed": True,
+            "reconciliation": found.to_payload(),
+            "status": "running",
+            "visited": ["act"],
+        }
+
+    if found.resolution is Resolution.ABSENT:
+        # Read successfully, nothing there. No money moved, so this is a
+        # clean failure: the merchant can be told plainly and the run can be
+        # replayed later without risking a duplicate.
+        return {
+            "reconciliation": found.to_payload(),
+            "status": "failed",
+            "failure": "refund_failed_without_effect",
+            "visited": ["act"],
+        }
+
+    # UNKNOWN. The read itself failed, so the question is still open, and
+    # the one thing that must not happen is another attempt. This is what
+    # the dead-letter queue is for: a human reads the ledger, checks the
+    # gateway, and decides.
+    return {
+        "reconciliation": found.to_payload(),
+        "status": "failed",
+        "failure": "refund_indeterminate_needs_human",
+        "visited": ["act"],
+    }
+
+
+def _record_reconciliation(context: NodeContext, state: AgentState, found: Reconciliation) -> None:
+    ledger = context.invoker.ledger
+    run_id = str(state["run_id"])
+    now = datetime.now(UTC)
+    ledger.append(
+        RunStep(
+            run_id=run_id,
+            seq=ledger.next_seq(run_id),
+            node="act",
+            kind=StepKind.COMPENSATION,
+            outcome=(StepOutcome.SUCCESS if found.is_settled else StepOutcome.ERROR),
+            started_at=now,
+            ended_at=now,
+            tool="create_refund",
+            error_code=None if found.is_settled else "reconciliation_unknown",
+            detail=f"{found.resolution}: {found.detail}",
+        ),
+        payloads={"output": found.to_payload()},
+    )
