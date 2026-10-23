@@ -78,9 +78,14 @@ class RecordedInvoker:
         ledger documents.
         """
         for step in self.source.steps(self.source_run_id):
-            if step.kind is not StepKind.TOOL_CALL or step.tool is None:
+            # Both kinds, and that matters: `record_step` writes a successful
+            # call as TOOL_CALL and a failed one as ERROR. Indexing only
+            # TOOL_CALL missed every recorded failure, so a replay of a run
+            # whose `post_message` was refused reported divergence instead of
+            # replaying the refusal.
+            if step.kind not in {StepKind.TOOL_CALL, StepKind.ERROR}:
                 continue
-            if step.input_digest is None:
+            if step.tool is None or step.input_digest is None:
                 continue
             key = (step.tool, step.input_digest)
             response = self.source.payload(self.source_run_id, step.seq, "output")
