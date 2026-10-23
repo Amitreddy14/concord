@@ -113,3 +113,90 @@ class TestTheTable:
         # The sentence is the point of the whole exercise: a model that
         # skips an approval gate is not a cheaper option.
         assert "Pass rate first" in render([result("m", passed=1, failed=0, median=10)])
+
+
+class TestTheBenchmarkPathUsesOnlyTheProtocol:
+    """The runner must not reach past `LLMGateway` into a double's internals.
+
+    This is the test that was missing. `Rig.outcome` read
+    `gateway.calls` — present on both test doubles, absent from the
+    protocol and from `OllamaGateway` — behind a
+    `type: ignore[attr-defined]`, so nothing caught it until the benchmark
+    was pointed at a real model and crashed on its first scenario. The
+    suppressed warning was the warning.
+
+    The gateway here implements the protocol and nothing else, which is the
+    only way to assert that the runner needs nothing else.
+    """
+
+    async def test_a_protocol_only_gateway_completes_a_scenario(self) -> None:
+        import json
+        from dataclasses import dataclass, field
+
+        from evals.fixtures import load_all
+        from evals.harness import run as harness
+        from evals.harness.gateway import TRIAGE, TRIAGE_DEFAULTS
+        from packages.shared.llm import Completion, UsageLedger
+
+        @dataclass
+        class ProtocolOnlyGateway:
+            """Exactly `LLMGateway`: `model`, `usage`, `complete`, `health`.
+
+            Deliberately no `calls` list, no inspection hooks, nothing a test
+            double would add for convenience. If the runner needs any of
+            that, this fails — which is the point.
+            """
+
+            model: str = "protocol-only"
+            usage: UsageLedger = field(default_factory=UsageLedger)
+
+            async def complete(
+                self,
+                *,
+                system: str,
+                user: str,
+                node: str,
+                run_id: str,
+                budget_tokens: int,
+                json_schema: dict[str, object] | None = None,
+                temperature: float = 0.0,  # allow-float: the protocol's knob
+                max_tokens: int = 1024,
+            ) -> Completion:
+                if node == "triage":
+                    text = json.dumps({**TRIAGE_DEFAULTS, **TRIAGE["S01"]})
+                else:
+                    text = json.dumps(
+                        {
+                            "reply": "Card refunds reach the cardholder in 5 to 7 working days.",
+                            "citations": _passages(system + user),
+                            "unsupported_claims": [],
+                        }
+                    )
+                completion = Completion(
+                    text=text,
+                    model=self.model,
+                    prompt_tokens=10,
+                    completion_tokens=10,
+                    latency_ms=1,
+                )
+                self.usage.record(run_id=run_id, node=node, completion=completion)
+                return completion
+
+            async def health(self) -> dict[str, object]:
+                return {"model": self.model, "supports_tool_calling": True}
+
+        def _passages(prompt: str) -> list[str]:
+            import re
+
+            return re.findall(r"^(psg_[\w.\-]+):", prompt, re.MULTILINE)
+
+        reports = await harness.run_scenario(
+            load_all()["S01"], lambda _scenario: ProtocolOnlyGateway()
+        )
+
+        assert reports, "the scenario produced no report"
+        assert all(r.error is None for r in reports), [r.error for r in reports]
+        # And the model-call count came from the usage ledger, which is the
+        # only place the protocol exposes it.
+        failures = [(c.name, c.detail) for r in reports for c in r.failures]
+        assert all(r.ok for r in reports), failures

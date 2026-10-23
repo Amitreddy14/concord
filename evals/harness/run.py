@@ -167,7 +167,16 @@ class Rig:
             messages=dict(ticketing.messages),
             notes=dict(crm.notes),
             paused=paused,
-            model_calls=len(self.context.gateway.calls),  # type: ignore[attr-defined]
+            # Counted from the usage ledger, which the gateway protocol
+            # declares, rather than from a `calls` list only the test
+            # doubles happen to have. The protocol's own docstring says why
+            # `usage` is on it — "leaving it off meant that read was
+            # unchecked and would have broken silently on a third
+            # implementation" — and reaching past it with a
+            # `type: ignore[attr-defined]` is how the benchmark crashed on
+            # the first real model it was pointed at. The suppressed warning
+            # was the warning.
+            model_calls=sum(1 for c in self.context.gateway.usage.calls if c["run_id"] == run_id),
             **extra,
         )
 
