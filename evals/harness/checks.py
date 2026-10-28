@@ -37,6 +37,7 @@ from packages.shared.dates import format_day
 from packages.shared.ledger import StepKind
 from packages.shared.money import Money
 from packages.tools import registry
+from packages.tools.incidents import is_active
 
 
 @dataclass(frozen=True, slots=True)
@@ -839,8 +840,12 @@ def incident_cited_only_if_active(outcome: Outcome, assertion: Assertion) -> Res
     incident = str(assertion.value)
     body = " ".join(str(m.get("body", "")) for m in outcome.outbound) or outcome.reply_text
     mentioned = incident in body
+    # Classified in one place, against the contract's enum. This was a
+    # hand-written set holding `open` and `active`, which the contract does
+    # not define, and missing `identified` and `monitoring`, which it does —
+    # so a reply correctly citing an `identified` incident was marked wrong.
     active = any(
-        i.get("incident_id") == incident and i.get("status") in {"open", "active", "investigating"}
+        i.get("incident_id") == incident and is_active(i)
         for i in outcome.state.get("incidents") or []
     )
     if mentioned and not active:
