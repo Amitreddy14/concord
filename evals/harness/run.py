@@ -410,6 +410,7 @@ def diagnose(outcome: Outcome) -> dict[str, Any]:
     should have ended up.
     """
     reply = outcome.reply
+    draft = outcome.state.get("draft") or {}
     return {
         "intent": (outcome.state.get("triage") or {}).get("intent"),
         "path": list(outcome.state.get("visited") or ()),
@@ -425,7 +426,18 @@ def diagnose(outcome: Outcome) -> dict[str, Any]:
         # format" from "never stated the fact" needed another GPU run. An
         # excerpt is enough to tell those apart and short enough to live in
         # every report.
-        "reply_excerpt": outcome.reply_text[:400],
+        "reply_excerpt": outcome.reply_text[:600],
+        # The draft, separately, because `reply` is not the model's output
+        # once grounding refuses it — `verify_grounding` replaces it with a
+        # refusal whose citations are empty. Reporting only the reply made
+        # every refused run read as "the model cited nothing", which is the
+        # opposite of the `invalid_citation` case, where it cited something
+        # that did not exist. One field made two failure modes identical.
+        "draft_citations": list(draft.get("citations") or []),
+        "draft_excerpt": str(draft.get("reply") or "")[:600],
+        "draft_unsupported_claims": list(draft.get("unsupported_claims") or []),
+        # Already names the offending id or the ungrounded claim count.
+        "grounding_problems": list((outcome.state.get("grounding") or {}).get("problems") or []),
         "grounding": (outcome.state.get("grounding") or {}).get("verdict"),
         "outbound_messages": len(outcome.outbound),
         "scopes_used": sorted(outcome.scopes_used),

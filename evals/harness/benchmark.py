@@ -313,13 +313,24 @@ def render(results: list[ModelResult]) -> str:
                     f"ticket={d.get('ticket_status')}/{d.get('ticket_assignee')}"
                 )
                 lines.append(f"      path: {' -> '.join(d.get('path') or [])}")
-                # What it cited and what it wrote. A grounding verdict of
+                # What the model produced, which is the draft — not the
+                # reply, which on a refused run is the system's own text.
                 # `invalid_citation` is unactionable without the id the model
-                # invented, and `partial` is unactionable without the prose.
-                lines.append(f"      cited: {d.get('reply_citations') or 'nothing'}")
-                excerpt = (d.get("reply_excerpt") or "").replace("\n", " ").strip()
-                if excerpt:
-                    lines.append(f"      wrote: {excerpt[:200]}")
+                # invented, and `partial` without the claims it could not
+                # ground; `problems` already names both.
+                lines.append(f"      cited: {d.get('draft_citations') or 'nothing'}")
+                for problem in d.get("grounding_problems") or []:
+                    lines.append(f"      problem: {problem}")
+                for claim in d.get("draft_unsupported_claims") or []:
+                    lines.append(f"      could not ground: {claim}")
+                drafted = (d.get("draft_excerpt") or "").replace("\n", " ").strip()
+                if drafted:
+                    lines.append(f"      drafted: {drafted[:400]}")
+                # Only when they differ, which is exactly when the draft was
+                # refused and the merchant got something else.
+                sent = (d.get("reply_excerpt") or "").replace("\n", " ").strip()
+                if sent and sent != drafted:
+                    lines.append(f"      sent instead: {sent[:200]}")
 
     lines.append("")
     lines.append(
