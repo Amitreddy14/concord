@@ -166,9 +166,9 @@ DRAFT_INSTRUCTION = """\
 You are drafting a reply from a payments platform's support desk to a merchant.
 
 Every factual claim in your reply must be supported by one of the supplied \
-passages, and you must cite the passage id for each. If a claim cannot be \
-supported by the passages, do not make it — list it under unsupported_claims \
-instead and leave it out of the reply.
+passages, and the id of each passage you relied on must appear in the \
+citations array. If a claim cannot be supported by the passages, do not make \
+it — list it under unsupported_claims instead and leave it out of the reply.
 
 Do not promise a callback time, a credit, a fee waiver, or any resolution date \
 that is not stated in the passages. Do not state account facts that are not in \
@@ -176,12 +176,54 @@ the facts section.
 
 Be direct and plain. No boilerplate apology."""
 
+# The contract spells out the citations array because the instruction above
+# saying "cite the passage id" was not enough: two different 8B models wrote
+# a good reply and left `citations` empty, grounding refused it as
+# unsupported, and nothing reached the merchant. The instruction said what to
+# do and never said where to put it.
+#
+# "Copy, do not compose" is the load-bearing sentence. A small model asked to
+# produce an identifier will produce something shaped like one, and a
+# plausible id for a corpus it did not see is exactly what the grounding
+# check rejects as a fabricated reference.
+# The two labelled sections of the facts block that carry citable ids, named
+# as constants because the output contract below quotes them. A contract
+# naming a section the prompt does not contain is a silent failure — the model
+# is told where to look and finds nothing there — and a contract naming only
+# one of them is worse than silent: it reads as a rule forbidding the other.
+#
+# Both are citable because grounding accepts both (``verify`` takes the
+# retrieved passages and ``self_evident`` action ids). A contract that
+# mentioned only the passages would tell a drafter not to cite the refund this
+# run had just issued, and the claim about that refund would come back
+# unsupported.
+PASSAGES_LABEL = "[supporting passages]"
+ACTIONS_LABEL = "[what you have already done for this merchant]"
+
 DRAFT_CONTRACT = """\
-Return a single JSON object matching the schema. The reply field is the message \
-text only."""
+Return a single JSON object matching the schema.
+
+- reply: the message text only. No citation markers, no ids, no footnotes.
+- citations: the ids you relied on, as a list of strings. Every id is already \
+  written for you at the start of a line under [supporting passages] or under \
+  [what you have already done for this merchant]. Copy them exactly. Do not \
+  compose, shorten or invent an id, and do not cite one that is not there.
+- unsupported_claims: anything you wanted to say and could not support.
+
+The citations array is how the reply is checked before it is sent. A reply \
+whose citations are empty, or whose ids were not copied from one of those two \
+sections, is discarded and the merchant receives nothing."""
 
 
-async def draft(state: AgentState, context: NodeContext) -> dict[str, Any]:
+def draft_facts(state: AgentState) -> str:
+    """The trusted facts block the drafter reads.
+
+    A function rather than a few lines inside ``draft`` so a test can read
+    what the model is actually shown. The citation format is the thing most
+    worth asserting and the thing least visible from the outside: the ids the
+    drafter is required to return have to appear here, in the section the
+    output contract names, or the requirement is unmeetable.
+    """
     passages = state.get("passages") or []
     merchant = state.get("merchant") or {}
 
@@ -189,23 +231,26 @@ async def draft(state: AgentState, context: NodeContext) -> dict[str, Any]:
     # before, so a reply could not report the refund the run had just issued
     # — it drafted from policy passages and the action was invisible to it.
     actions = action_facts(state)
+    specialist = specialist_facts(state)
 
-    facts = "\n".join(
+    return "\n".join(
         [
             f"merchant: {merchant.get('display_name', 'unknown')}",
             f"tier: {merchant.get('tier', 'unknown')}",
-            *([specialist_facts(state)] if specialist_facts(state) else []),
-            *(["", "[what you have already done for this merchant]", *actions] if actions else []),
+            *([specialist] if specialist else []),
+            *(["", ACTIONS_LABEL, *actions] if actions else []),
             "",
-            "[supporting passages]",
+            PASSAGES_LABEL,
             *(f"{p['passage_id']}: {p.get('title', '')} — {p.get('text', '')}" for p in passages),
         ]
     )
 
+
+async def draft(state: AgentState, context: NodeContext) -> dict[str, Any]:
     prompt = prompts.assemble(
         instruction=DRAFT_INSTRUCTION,
         output_contract=DRAFT_CONTRACT,
-        facts=facts,
+        facts=draft_facts(state),
         untrusted={"ticket body": state.get("body", "")},
     )
     result = await generate_structured(
