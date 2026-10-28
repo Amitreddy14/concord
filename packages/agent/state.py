@@ -73,8 +73,11 @@ class DraftResult(BaseModel):
     unsupported_claims: list[str] = Field(
         default_factory=list,
         description=(
-            "Claims the drafter could not ground. Non-empty means the reply must not "
-            "be sent as it stands."
+            "Claims the reply itself wanted to make and could not ground. Not the "
+            "merchant's own statements, which are the input under analysis rather "
+            "than assertions the desk makes. Non-empty means the reply must not be "
+            "sent as it stands, so a merchant's complaint listed here costs a "
+            "correct reply."
         ),
     )
 

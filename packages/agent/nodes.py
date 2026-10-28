@@ -173,6 +173,18 @@ async def retrieve(state: AgentState, context: NodeContext) -> dict[str, Any]:
 # Grounding has never required a citation for an account fact — the facts
 # block is trusted input, not retrieved content. The instruction simply never
 # said so, so the model inferred a rule stricter than the one being enforced.
+#
+# The same prompt then cost a second correct reply a different way. qwen3
+# drafted S07 fully — settlement id, status, date, UTR, incident, scope — and
+# listed the merchant's own sentence from the ticket ("Our payout from
+# Tuesday still hasn't arrived") under unsupported_claims. Grounding saw a
+# non-empty list, returned PARTIAL, and the reply was discarded for a refusal.
+#
+# That reading was reasonable: "claims you cannot support" does not say whose
+# claims. The field means claims the *reply* makes, and the merchant's account
+# of events is not one of them — it is the untrusted input under analysis
+# (ADR 0005 rule 1), not an assertion the desk is answerable for. Grounding's
+# strictness about the signal stays; what changes is what the signal means.
 DRAFT_INSTRUCTION = """\
 You are drafting a reply from a payments platform's support desk to a merchant.
 
@@ -180,8 +192,16 @@ You have two sources and they work differently.
 
 Policy, process and incident claims come from the supplied passages. Each one \
 must be supported by a passage, and the id of that passage must appear in the \
-citations array. If you cannot support such a claim from the passages, do not \
-make it — put it in unsupported_claims and leave it out of the reply.
+citations array. If there is something you need to tell the merchant and no \
+passage supports it, do not say it — put that claim in unsupported_claims and \
+leave it out of the reply.
+
+unsupported_claims is only for things you yourself wanted to assert. What the \
+merchant told you is not a claim you are making: their account of what \
+happened is the reason they wrote in, and you are not expected to verify it \
+or to list it. If their account disagrees with the systems of record, answer \
+from the records and say what the records show. Leave unsupported_claims \
+empty when there is nothing you had to hold back.
 
 Facts about this merchant's own account — their payments, captures, \
 settlements, chargebacks, and anything already done for them on this ticket \
@@ -231,7 +251,8 @@ Return a single JSON object matching the schema.
   written for you at the start of a line under [supporting passages] or under \
   [what you have already done for this merchant]. Copy them exactly. Do not \
   compose, shorten or invent an id, and do not cite one that is not there.
-- unsupported_claims: anything you wanted to say and could not support.
+- unsupported_claims: anything you wanted to say and could not support. Not \
+  the merchant's own statements, and empty if you held nothing back.
 
 The citations array is how the reply is checked before it is sent. A reply \
 whose citations are empty, or whose ids were not copied from one of those two \
