@@ -188,34 +188,24 @@ async def retrieve(state: AgentState, context: NodeContext) -> dict[str, Any]:
 DRAFT_INSTRUCTION = """\
 You are drafting a reply from a payments platform's support desk to a merchant.
 
-You have two sources and they work differently.
+Answer what they asked, from two sources.
 
-Policy, process and incident claims come from the supplied passages. Each one \
-must be supported by a passage, and the id of that passage must appear in the \
-citations array. If there is something you need to tell the merchant and no \
-passage supports it, do not say it — put that claim in unsupported_claims and \
-leave it out of the reply.
+The facts section holds this merchant's own account — payments, captures, \
+settlements, chargebacks, and anything already done for them on this ticket. \
+It is the system of record. State what it says, plainly, and no passage id is \
+needed for it. If they asked about a status, an amount or a date, the answer \
+goes in the reply. Copy amounts and dates exactly as written; do not convert \
+or recalculate them.
 
-unsupported_claims is only for things you yourself wanted to assert. What the \
-merchant told you is not a claim you are making: their account of what \
-happened is the reason they wrote in, and you are not expected to verify it \
-or to list it. If their account disagrees with the systems of record, answer \
-from the records and say what the records show. Leave unsupported_claims \
-empty when there is nothing you had to hold back.
+The passages hold policy, process and incident wording. A claim of that kind \
+needs a passage behind it, and that passage's id in the citations array. If \
+you would need to say something no passage supports, leave it out of the \
+reply and put it in unsupported_claims. The merchant's own words never go \
+there — that list is for claims you would have made yourself.
 
-Facts about this merchant's own account — their payments, captures, \
-settlements, chargebacks, and anything already done for them on this ticket \
-— come from the facts section. That section is the system of record. State \
-those facts plainly; they need no passage id. Where the merchant asked about \
-one, answer it: a status, an amount or a date they are waiting on belongs in \
-the reply.
-
-Copy amounts and dates exactly as the facts section gives them. Do not \
-convert, recalculate or re-word them, and do not state an account fact that \
-is not there.
-
-Do not promise a callback time, a credit, a fee waiver, or any resolution \
-date that is not stated in the passages or the facts section.
+State nothing that is not in one of those two sections. In particular, do not \
+promise a callback time, a credit, a fee waiver or a resolution date, and do \
+not name a record, id or document that does not appear above.
 
 Be direct and plain. No boilerplate apology."""
 
@@ -328,6 +318,10 @@ async def verify_grounding(state: AgentState, context: NodeContext) -> dict[str,
         draft=draft_result,
         retrieved=passages,
         require_citations=context.require_citations,
+        # Everything the drafter was legitimately given. Rebuilt from state
+        # rather than remembered from the draft node, so a reply can only
+        # name a record this run actually read.
+        trusted=draft_facts(state),
         # Read from state, not from the draft: a drafter inventing a `run:`
         # citation for a refund that never happened is still caught.
         self_evident=action_citations(state),
