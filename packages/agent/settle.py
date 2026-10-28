@@ -138,6 +138,13 @@ async def settle(state: AgentState, context: NodeContext) -> dict[str, Any]:
                     else str(reply["text"])
                 ),
                 "citations": list(reply.get("citations") or []),
+                # A question asserts nothing, so it carries no obligation to
+                # cite. Declared rather than inferred by the service, which
+                # cannot tell a question from an answer — and until this was
+                # declared, a tenant requiring citations could not be asked
+                # one: the message was rejected and the ticket then waited
+                # for a reply to a question nobody had received.
+                "asserts_facts": not reply.get("is_question", False),
             },
         )
 
