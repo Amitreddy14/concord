@@ -142,6 +142,12 @@ class ModelResult:
             "headroom_mib": self.headroom_mib,
             "failures": self.failures,
             "errored": self.errored,
+            # The runs themselves, with every check's detail and the
+            # diagnostics that explain a cluster. Omitting these made the
+            # report unreadable without a GPU: the failure names were there
+            # and the reasons were not, so the only way to find out why was
+            # to run it again.
+            "runs": [r.to_payload() for r in self.runs],
         }
 
 
@@ -286,6 +292,27 @@ def render(results: list[ModelResult]) -> str:
         lines.append("  what each model got wrong:")
         for result in failing:
             lines.append(f"    {result.model}: {', '.join(result.failures)}")
+
+        # And why, as far as the run's own shape can say. Four assertions
+        # failing in one scenario is usually one cause upstream of all four,
+        # and the intent and the path are where that shows. Printed here so
+        # the table can be acted on without re-running anything on a GPU.
+        lines.append("")
+        lines.append("  how the failing runs went:")
+        for result in failing:
+            for run in result.runs:
+                if not run.failures and not run.error:
+                    continue
+                d = run.diagnostics or {}
+                lines.append(
+                    f"    {result.model} {run.scenario_id}: "
+                    f"intent={d.get('intent')} "
+                    f"grounding={d.get('grounding')} "
+                    f"refusal={d.get('reply_is_refusal')} "
+                    f"outbound={d.get('outbound_messages')} "
+                    f"ticket={d.get('ticket_status')}/{d.get('ticket_assignee')}"
+                )
+                lines.append(f"      path: {' -> '.join(d.get('path') or [])}")
 
     lines.append("")
     lines.append(

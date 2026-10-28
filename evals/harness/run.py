@@ -101,6 +101,16 @@ class RunReport:
     checks: list[CheckReport] = field(default_factory=list)
     error: str | None = None
     duration_ms: int = 0
+    diagnostics: dict[str, Any] = field(default_factory=dict)
+    """The few facts that explain a cluster of failures at a glance.
+
+    Four assertions failing in one scenario is usually one cause, and the
+    cause is almost always upstream of all four: a misclassified intent
+    sends the run down a path where none of them can pass. Without the
+    intent and the path in the report, finding that out means re-running on
+    a GPU — so a benchmark that cannot be diagnosed from its own output is
+    a benchmark that gets re-run constantly.
+    """
 
     @property
     def ok(self) -> bool:
@@ -117,6 +127,7 @@ class RunReport:
             "ok": self.ok,
             "error": self.error,
             "duration_ms": self.duration_ms,
+            "diagnostics": self.diagnostics,
             "checks": [c.to_payload() for c in self.checks],
         }
 
@@ -384,8 +395,35 @@ async def _one_run(
             checks=evaluate(outcome, scenario.must) if error is None else [],
             error=error,
             duration_ms=duration,
+            diagnostics=diagnose(outcome),
         )
         return report, _signature(outcome), rig, run_id, state, paused
+
+
+def diagnose(outcome: Outcome) -> dict[str, Any]:
+    """The handful of facts that usually explain a whole cluster of failures.
+
+    Everything here is already in state or in the stores; none of it is a
+    new measurement. What it buys is being able to read a benchmark result
+    without a GPU: `intent` and `path` together say which way the run went,
+    and a run that went the wrong way fails every assertion about where it
+    should have ended up.
+    """
+    reply = outcome.reply
+    return {
+        "intent": (outcome.state.get("triage") or {}).get("intent"),
+        "path": list(outcome.state.get("visited") or ()),
+        "permission": outcome.decision.get("permission"),
+        "risk_tier": outcome.decision.get("risk_tier"),
+        "ticket_status": outcome.ticket.get("status"),
+        "ticket_assignee": outcome.ticket.get("assignee"),
+        "reply_is_refusal": bool(reply.get("is_refusal")),
+        "reply_citations": list(reply.get("citations") or []),
+        "grounding": (outcome.state.get("grounding") or {}).get("verdict"),
+        "outbound_messages": len(outcome.outbound),
+        "scopes_used": sorted(outcome.scopes_used),
+        "refunds": len(outcome.refunds),
+    }
 
 
 def _wants_restart(scenario: Scenario) -> bool:
@@ -479,6 +517,7 @@ async def _one_branch(
             checks=evaluate(outcome, assertions) if error is None else [],
             error=error,
             duration_ms=duration,
+            diagnostics=diagnose(outcome),
         )
 
 
