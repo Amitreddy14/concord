@@ -934,3 +934,32 @@ def untrusted_text_never_in_instruction_position(outcome: Outcome, _assertion: A
                 f"the ticket body appears in the system prompt for the {step.node!r} node"
             )
     return Result.passed("the body appears only as delimited data")
+
+
+@check("question_reached_the_merchant")
+def question_reached_the_merchant(outcome: Outcome, _assertion: Assertion) -> Result:
+    """A run that ends in a question is only successful if the question lands.
+
+    Read from the ticketing store, because what the merchant received is what
+    was posted. The agent holding a well-formed question it could not deliver
+    is the failure this exists to catch, and it is invisible from state: the
+    reply is there, the status says awaiting_customer, and nothing says the
+    merchant was never asked.
+    """
+    reply = outcome.reply
+    if not reply.get("is_question"):
+        return Result.passed("this run did not end in a question")
+
+    posted = outcome.outbound
+    if not posted:
+        problems = (outcome.state.get("settled") or {}).get("problems") or []
+        because = f" ({'; '.join(problems)})" if problems else ""
+        return Result.failed(
+            "the run ended in a question that was never posted, so the ticket waits "
+            f"for an answer the merchant was never asked for{because}"
+        )
+
+    question = str(reply.get("text", ""))
+    if not any(question[:60] in str(m.get("body", "")) for m in posted):
+        return Result.failed("an outbound message was posted, but not the question")
+    return Result.passed(f"the question reached the merchant in {len(posted)} message(s)")

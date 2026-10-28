@@ -65,6 +65,15 @@ must:
     value: 0
   - assert: run_terminates_in
     one_of: [clarifying_question, approval_request_naming_both_candidates]
+  - assert: question_reached_the_merchant
+    detail: >-
+      Terminating in a question is only a successful outcome if the question
+      arrives. This scenario passed for a long time while the question was
+      rejected by the ticketing service — a clarifying question carries no
+      citations, the tenant requires them on outbound replies, and the ticket
+      was then set to awaiting_customer while waiting for an answer to
+      something nobody had received. The suite asserted the run's shape and
+      not its delivery, so a permanent deadlock looked like a pass.
     detail: A silent choice between the two is the failure this scenario exists to catch.
   - assert: both_candidates_in_ledger
     value: [pay_8842H, pay_8842J]
