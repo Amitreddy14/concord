@@ -19,7 +19,12 @@ from apps.mocks.faults import FaultConfig, FaultProfile
 from apps.mocks.serve import build
 from evals.fixtures import Scenario, reset_payload
 from packages.agent.graph import build_graph, initial_state
-from packages.agent.grounding import GroundingVerdict, refusal_reply, verify
+from packages.agent.grounding import (
+    REFUSAL_TEMPLATES,
+    GroundingVerdict,
+    refusal_reply,
+    verify,
+)
 from packages.agent.nodes import NodeContext
 from packages.policy.tenant import TenantConfig, load_tenant
 from packages.shared.ledger import InMemoryLedger
@@ -58,12 +63,16 @@ class TestVerifier:
             draft={"citations": ["psg_a"], "unsupported_claims": []},
             retrieved=RETRIEVED,
             require_citations=True,
+            # These drafts carry no reply text, so there are no identifiers to
+            # re-validate and the trusted material is irrelevant to them. The
+            # entity check has its own class below.
+            trusted="",
         )
         assert result.verdict is GroundingVerdict.SUPPORTED
         assert result.may_send
 
     def test_an_empty_retrieval_is_a_refusal(self) -> None:
-        result = verify(draft={"citations": []}, retrieved=[], require_citations=True)
+        result = verify(draft={"citations": []}, retrieved=[], require_citations=True, trusted="")
         assert result.verdict is GroundingVerdict.UNSUPPORTED
         assert not result.may_send
 
@@ -74,6 +83,7 @@ class TestVerifier:
             draft={"citations": ["psg_refund-policy.v9.invented"]},
             retrieved=RETRIEVED,
             require_citations=True,
+            trusted="",
         )
         assert result.verdict is GroundingVerdict.INVALID_CITATION
         assert not result.may_send
@@ -86,6 +96,7 @@ class TestVerifier:
             draft={"citations": ["psg_a"], "citation_hashes": {"psg_a": "was-different"}},
             retrieved=RETRIEVED,
             require_citations=True,
+            trusted="",
         )
         assert result.verdict is GroundingVerdict.INVALID_CITATION
 
@@ -94,22 +105,23 @@ class TestVerifier:
             draft={"citations": ["psg_a"], "unsupported_claims": ["refunds are instant"]},
             retrieved=RETRIEVED,
             require_citations=True,
+            trusted="",
         )
         assert result.verdict is GroundingVerdict.PARTIAL
         assert not result.may_send
 
     def test_a_tenant_requiring_citations_rejects_an_uncited_reply(self) -> None:
         assert not verify(
-            draft={"citations": []}, retrieved=RETRIEVED, require_citations=True
+            draft={"citations": []}, retrieved=RETRIEVED, require_citations=True, trusted=""
         ).may_send
         assert verify(
-            draft={"citations": []}, retrieved=RETRIEVED, require_citations=False
+            draft={"citations": []}, retrieved=RETRIEVED, require_citations=False, trusted=""
         ).may_send
 
     def test_a_refusal_does_not_explain_the_machinery(self) -> None:
         # A merchant does not need to know retrieval returned nothing. They
         # need to know a person is picking it up.
-        text = refusal_reply(verify(draft={}, retrieved=[], require_citations=True))
+        text = refusal_reply(verify(draft={}, retrieved=[], require_citations=True, trusted=""))
         for leak in ("retriev", "corpus", "passage", "embedding", "index"):
             assert leak not in text.lower()
 
@@ -302,3 +314,126 @@ class TestRefusalPath:
             merchant_id="M-1001",
         )
         assert final["reply"]["text"].strip()
+
+
+class TestOutboundEntityValidation:
+    """ADR 0005 rule 3, in the direction it was not applied.
+
+    Rule 3 re-validates every identifier arriving from merchant text. Nothing
+    re-validated the identifiers the model sent out, and that is the worse
+    exposure: an inbound fabrication misleads the agent, an outbound one
+    misleads the merchant.
+
+    The case that prompted this: asked about a settlement delay, qwen3:8b
+    drafted a reply adjudicating a defective product and named
+    `shipment_record_12345` and `delivery_receipt_67890`. It was stopped only
+    because it also cited those ids. Named in prose and left out of the
+    citations array, they would have reached the merchant.
+    """
+
+    FACTS = "settlement setl_3310: processing, expected 17 October 2026, utr not yet issued"
+
+    def test_a_record_in_the_facts_may_be_named(self) -> None:
+        result = verify(
+            draft={
+                "reply": "Your settlement setl_3310 is still processing.",
+                "citations": ["psg_a"],
+            },
+            retrieved=RETRIEVED,
+            require_citations=True,
+            trusted=self.FACTS,
+        )
+        assert result.verdict is GroundingVerdict.SUPPORTED
+
+    def test_a_record_that_exists_nowhere_blocks_the_send(self) -> None:
+        result = verify(
+            draft={
+                "reply": "See shipment_record_12345 for the delivery condition.",
+                "citations": ["psg_a"],
+            },
+            retrieved=RETRIEVED,
+            require_citations=True,
+            trusted=self.FACTS,
+        )
+        assert result.verdict is GroundingVerdict.FABRICATED_ENTITY
+        assert not result.may_send
+        assert "shipment_record_12345" in " ".join(result.problems)
+
+    def test_the_uncited_case_is_the_one_the_citation_checks_miss(self) -> None:
+        """A fabricated record named in prose and cited nowhere.
+
+        Every other check here reads the citations array. This draft's
+        citations are impeccable.
+        """
+        result = verify(
+            draft={
+                "reply": "I have logged this against delivery_receipt_67890.",
+                "citations": ["psg_a"],
+            },
+            retrieved=RETRIEVED,
+            require_citations=True,
+            trusted=self.FACTS,
+        )
+        assert result.verdict is GroundingVerdict.FABRICATED_ENTITY
+
+    def test_ordinary_prose_is_not_an_identifier(self) -> None:
+        """The check must not refuse a reply for being written in English.
+
+        A false refusal is safer than a false send, but a check that fires on
+        normal wording would make every reply a refusal, and an agent that
+        refuses everything is not safe — it is useless, and someone will turn
+        the check off.
+        """
+        reply = (
+            "Your payout is delayed. Reason code 4853 applies and a refund of INR 1,999.00 "
+            "was issued. Please use two_factor_auth and follow_up with support if it "
+            "has not arrived by then."
+        )
+        result = verify(
+            draft={"reply": reply, "citations": ["psg_a"]},
+            retrieved=RETRIEVED,
+            require_citations=True,
+            trusted=self.FACTS,
+        )
+        assert result.verdict is GroundingVerdict.SUPPORTED
+
+    def test_a_passage_the_run_retrieved_counts_as_trusted(self) -> None:
+        # The drafter is given passage text as well as account facts, and may
+        # name a record the passage names.
+        result = verify(
+            draft={"reply": "Incident inc_2208 is still open.", "citations": ["psg_a"]},
+            retrieved=RETRIEVED,
+            require_citations=True,
+            trusted=f"{self.FACTS}\npsg_a: incident inc_2208 affects settlements",
+        )
+        assert result.verdict is GroundingVerdict.SUPPORTED
+
+
+class TestEveryRefusalHasWording:
+    def test_every_non_supported_verdict_has_a_template(self) -> None:
+        """Totality, because the alternative was a silent default.
+
+        `refusal_reply` used `.get(..., UNSUPPORTED)`, so a new verdict
+        inherited "I don't have policy that covers this" — which tells the
+        merchant something untrue about why they are waiting, and nothing
+        fails until a human reads a transcript.
+        """
+        for verdict in GroundingVerdict:
+            if verdict is GroundingVerdict.SUPPORTED:
+                continue
+            assert verdict in REFUSAL_TEMPLATES, f"{verdict} has no refusal wording"
+
+    def test_a_supported_verdict_has_no_refusal_text(self) -> None:
+        result = verify(
+            draft={"citations": ["psg_a"]},
+            retrieved=RETRIEVED,
+            require_citations=True,
+            trusted="",
+        )
+        with pytest.raises(ValueError, match="sent as drafted"):
+            refusal_reply(result)
+
+    def test_no_refusal_explains_the_machinery(self) -> None:
+        for verdict, text in REFUSAL_TEMPLATES.items():
+            for leak in ("retriev", "corpus", "passage", "embedding", "index", "grounding"):
+                assert leak not in text.lower(), f"{verdict} leaks {leak!r}"

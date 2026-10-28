@@ -23,6 +23,7 @@ that blocks a send. The gate checks facts.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -41,6 +42,21 @@ class GroundingVerdict(StrEnum):
 
     PARTIAL = "partial"
     """The drafter flagged claims it could not ground."""
+
+    FABRICATED_ENTITY = "fabricated_entity"
+    """The reply names a record that exists in neither the facts nor the corpus.
+
+    ADR 0005 rule 3 applied in the outbound direction. Rule 3 re-validates
+    every identifier arriving *from* merchant text; nothing re-validated the
+    identifiers the model sent *out*, which is a worse exposure — an inbound
+    fabrication misleads the agent, an outbound one misleads the merchant.
+
+    This is not hypothetical. Asked about a settlement delay, qwen3:8b
+    drafted a reply adjudicating a defective product and cited
+    `shipment_record_12345` and `delivery_receipt_67890`. That draft was
+    stopped only because it also *cited* those ids; had it named them in
+    prose alone, nothing would have caught it.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,11 +90,29 @@ class GroundingResult:
 SELF_EVIDENT_PREFIX = "run:"
 
 
+#: What an identifier looks like in a reply: a word carrying an underscore and
+#: a digit. Narrow on purpose. It catches `setl_3310`, `inc_2208` and
+#: `shipment_record_12345`, and leaves alone ordinary prose, English compounds
+#: like `two_factor_auth`, reason codes, currency codes and formatted money —
+#: all of which appear in legitimate replies and none of which are records.
+#:
+#: Deliberately not a list of the contracts' id prefixes. The fabrications
+#: actually observed (`shipment_record_12345`) matched no prefix in any
+#: contract, because a model inventing a record invents its naming scheme too.
+IDENTIFIER_SHAPE = re.compile(r"\b[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+\b")
+
+
+def identifiers(text: str) -> list[str]:
+    """Identifier-shaped tokens in a piece of prose, in order of appearance."""
+    return [token for token in IDENTIFIER_SHAPE.findall(text) if any(c.isdigit() for c in token)]
+
+
 def verify(
     *,
     draft: dict[str, Any],
     retrieved: list[dict[str, Any]],
     require_citations: bool,
+    trusted: str,
     self_evident: Sequence[str] = (),
 ) -> GroundingResult:
     """Decide whether a draft may be sent.
@@ -87,6 +121,13 @@ def verify(
     issued, the ticket it escalated. They are supplied by the caller from
     state rather than accepted on the model's word, so a drafter inventing a
     `run:` citation is still caught.
+
+    ``trusted`` is every piece of text the drafter was legitimately given:
+    the facts block and the retrieved passages. Any identifier in the reply
+    that does not appear in it was invented. Required rather than defaulted,
+    because an empty string is a real answer — with no facts and no corpus,
+    every identifier in a reply is fabricated — and a default would make
+    "nobody passed any" indistinguishable from it.
     """
     citations = list(draft.get("citations") or [])
     unsupported = list(draft.get("unsupported_claims") or [])
@@ -126,6 +167,14 @@ def verify(
     if unknown or stale:
         return GroundingResult(GroundingVerdict.INVALID_CITATION, citations, problems)
 
+    # Entities the reply names, which the citation checks above do not see: a
+    # record mentioned in prose and never cited passes every check that looks
+    # only at the citations array.
+    invented = [i for i in identifiers(str(draft.get("reply") or "")) if i not in trusted]
+    if invented:
+        problems.append(f"named records that do not exist: {', '.join(sorted(set(invented)))}")
+        return GroundingResult(GroundingVerdict.FABRICATED_ENTITY, citations, problems)
+
     if unsupported:
         return GroundingResult(GroundingVerdict.PARTIAL, citations, problems)
 
@@ -151,6 +200,10 @@ REFUSAL_TEMPLATES = {
         "Part of this needs a colleague to confirm before I answer, so I'm passing it on "
         "rather than answer half of it."
     ),
+    GroundingVerdict.FABRICATED_ENTITY: (
+        "I couldn't match this to the records on your account, so I'm passing it to a "
+        "colleague rather than reply with details I can't confirm."
+    ),
 }
 
 
@@ -161,4 +214,13 @@ def refusal_reply(result: GroundingResult) -> str:
     machinery. A merchant does not need to know that retrieval returned
     nothing; they need to know a person is picking it up.
     """
-    return REFUSAL_TEMPLATES.get(result.verdict, REFUSAL_TEMPLATES[GroundingVerdict.UNSUPPORTED])
+    if result.verdict is GroundingVerdict.SUPPORTED:
+        raise ValueError("a supported draft is sent as drafted; it has no refusal text")
+    try:
+        return REFUSAL_TEMPLATES[result.verdict]
+    except KeyError as error:  # pragma: no cover - the totality test forbids this
+        # Not defaulted to the UNSUPPORTED wording, which is what this did.
+        # A new verdict silently inheriting "I don't have policy that covers
+        # this" tells the merchant something untrue about why they are
+        # waiting, and nothing fails until someone reads a transcript.
+        raise ValueError(f"no refusal wording for {result.verdict}") from error
