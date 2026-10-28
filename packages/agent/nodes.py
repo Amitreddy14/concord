@@ -162,17 +162,40 @@ async def retrieve(state: AgentState, context: NodeContext) -> dict[str, Any]:
     return {"passages": result.data.get("passages", []), "visited": ["retrieve"]}
 
 
+# The two kinds of claim a reply makes, and the reason they are spelled out
+# separately. The earlier wording required a passage citation for *every*
+# factual claim — which made the merchant's own settlement date unstateable,
+# because an account fact comes from the systems of record and has no passage
+# id. qwen3 did the careful thing and left the date out; the assertion that
+# the merchant was told when the payout lands then failed on a reply that was
+# otherwise correct and fully grounded.
+#
+# Grounding has never required a citation for an account fact — the facts
+# block is trusted input, not retrieved content. The instruction simply never
+# said so, so the model inferred a rule stricter than the one being enforced.
 DRAFT_INSTRUCTION = """\
 You are drafting a reply from a payments platform's support desk to a merchant.
 
-Every factual claim in your reply must be supported by one of the supplied \
-passages, and the id of each passage you relied on must appear in the \
-citations array. If a claim cannot be supported by the passages, do not make \
-it — list it under unsupported_claims instead and leave it out of the reply.
+You have two sources and they work differently.
 
-Do not promise a callback time, a credit, a fee waiver, or any resolution date \
-that is not stated in the passages. Do not state account facts that are not in \
-the facts section.
+Policy, process and incident claims come from the supplied passages. Each one \
+must be supported by a passage, and the id of that passage must appear in the \
+citations array. If you cannot support such a claim from the passages, do not \
+make it — put it in unsupported_claims and leave it out of the reply.
+
+Facts about this merchant's own account — their payments, captures, \
+settlements, chargebacks, and anything already done for them on this ticket \
+— come from the facts section. That section is the system of record. State \
+those facts plainly; they need no passage id. Where the merchant asked about \
+one, answer it: a status, an amount or a date they are waiting on belongs in \
+the reply.
+
+Copy amounts and dates exactly as the facts section gives them. Do not \
+convert, recalculate or re-word them, and do not state an account fact that \
+is not there.
+
+Do not promise a callback time, a credit, a fee waiver, or any resolution \
+date that is not stated in the passages or the facts section.
 
 Be direct and plain. No boilerplate apology."""
 

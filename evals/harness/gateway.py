@@ -115,12 +115,19 @@ RUN_CITATION = re.compile(r"^(run:[\w.:\-]+):", re.MULTILINE)
 #: matched nothing — the facts say "evidence due 2026-10-26T…" and the
 #: pattern wanted a colon — so a reply silently omitted a date the node had
 #: handed it, and the scenario failed on the reply rather than on the gap.
+#:
+#: They broke a second time when dates began arriving rendered: `\S+?`
+#: captured "17" out of "expected 17 October 2026" and the reply stated a
+#: number. A value that may contain spaces needs an anchor at its far end —
+#: the comma that follows it, or the end of the line — not a non-whitespace
+#: run. The eval suite caught both, which is the point of a double that
+#: reads the prompt instead of the scenario id.
 FACT_PATTERNS: dict[str, re.Pattern[str]] = {
-    # settlement sett_x: processing, expected 2026-10-17T10:00:00Z, utr …
+    # settlement sett_x: processing, expected 17 October 2026, utr …
     "settlement_status": re.compile(r"^settlement \S+:\s*(\w+),", re.MULTILINE),
-    "expected_at": re.compile(r"expected (\S+?),", re.IGNORECASE),
-    # chargeback cb_x: reason_code, evidence due 2026-10-26T23:59:59Z
-    "evidence_due": re.compile(r"evidence due (\S+)", re.IGNORECASE),
+    "expected_at": re.compile(r"expected (.+?),", re.IGNORECASE),
+    # chargeback cb_x: 4853, evidence due 26 October 2026
+    "evidence_due": re.compile(r"evidence due (.+?)\s*$", re.IGNORECASE | re.MULTILINE),
     # run:refund:rfnd_x: a refund of INR 1,999.00 has been issued against …
     "refund_amount": re.compile(r"a refund of (.+?) has been issued"),
 }
@@ -219,8 +226,13 @@ def _refund_sentence(facts: dict[str, str]) -> str:
 def _opening(scenario_id: str, facts: dict[str, str]) -> str:
     if scenario_id == "S07":
         status = facts.get("settlement_status", "being processed")
+        # Stated as handed over, not sliced. `expected[:10]` used to mean
+        # "the date part of an ISO timestamp"; once the facts block began
+        # rendering days, the same slice cut "17 October 2026" down to "17
+        # October" and quietly dropped the year. A magic number standing in
+        # for a format is a format assumption with nowhere to fail loudly.
         expected = facts.get("expected_at")
-        when = f" and is expected on {expected[:10]}" if expected else ""
+        when = f" and is expected on {expected}" if expected else ""
         return f"Your settlement is currently {status}{when}."
     if scenario_id == "S08":
         return (
@@ -229,7 +241,7 @@ def _opening(scenario_id: str, facts: dict[str, str]) -> str:
         )
     if scenario_id == "S06":
         due = facts.get("evidence_due")
-        deadline = f" Evidence is due by {due[:10]}." if due else ""
+        deadline = f" Evidence is due by {due}." if due else ""
         return f"I have put together the evidence for this chargeback.{deadline}"
     if scenario_id == "S12":
         return "I can see you have been in touch about this several times."

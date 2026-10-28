@@ -33,6 +33,7 @@ from typing import Any
 
 from evals.fixtures import Assertion
 from evals.harness.outcome import Outcome
+from packages.shared.dates import format_day
 from packages.shared.ledger import StepKind
 from packages.shared.money import Money
 from packages.tools import registry
@@ -776,26 +777,56 @@ def reply_states_settlement_status_from_system(outcome: Outcome, assertion: Asse
     return Result.passed(wanted)
 
 
+def _day_and_rendering(wanted: str) -> tuple[str, str] | None:
+    """The two spellings of an expected date, or None if it is not one.
+
+    Returned rather than raised because a check must always produce a
+    ``Result``: a fixture holding a malformed date is a fixture bug and
+    belongs in the report as a named failure, not as a traceback that takes
+    the rest of the suite with it. The totality test is what found this.
+    """
+    try:
+        return wanted[:10], format_day(wanted)
+    except ValueError:
+        return None
+
+
 @check("reply_states_expected_at_from_system")
 def reply_states_expected_at_from_system(outcome: Outcome, assertion: Assertion) -> Result:
     wanted = str(assertion.value)
     body = " ".join(str(m.get("body", "")) for m in outcome.outbound) or outcome.reply_text
-    day = wanted[:10]
-    if day not in str([s for s in outcome.state.get("settlements") or []]):
-        return Result.failed(f"no settlement the run read expects {day}")
-    if day not in body:
-        return Result.failed(f"the reply never states the expected date {day}")
-    return Result.passed(day)
+    if wanted[:10] not in str([s for s in outcome.state.get("settlements") or []]):
+        return Result.failed(f"no settlement the run read expects {wanted[:10]}")
+    # Either rendering states the date. This check is named for the claim,
+    # not the format: the ISO day is what the record holds, and the rendered
+    # day is what the facts block now hands the drafter to copy. Demanding
+    # `2026-10-17` in a merchant's inbox would be the harness dictating how
+    # the product writes. Only those two, both denoting exactly this day —
+    # "mid-October" is not a date.
+    spellings = _day_and_rendering(wanted)
+    if spellings is None:
+        return Result.failed(f"the fixture's expected_at is not a timestamp: {wanted!r}")
+    day, rendered = spellings
+    if day not in body and rendered not in body:
+        return Result.failed(
+            f"the reply never states the expected date {day} (as {day!r} or {rendered!r})"
+        )
+    return Result.passed(rendered if rendered in body else day)
 
 
 @check("reply_states_evidence_deadline")
 def reply_states_evidence_deadline(outcome: Outcome, assertion: Assertion) -> Result:
     wanted = str(assertion.value)
     body = " ".join(str(m.get("body", "")) for m in outcome.outbound) or outcome.reply_text
-    day = wanted[:10]
-    if day not in body:
-        return Result.failed(f"the reply never states the evidence deadline {day}")
-    return Result.passed(day)
+    spellings = _day_and_rendering(wanted)
+    if spellings is None:
+        return Result.failed(f"the fixture's evidence deadline is not a timestamp: {wanted!r}")
+    day, rendered = spellings
+    if day not in body and rendered not in body:
+        return Result.failed(
+            f"the reply never states the evidence deadline {day} (as {day!r} or {rendered!r})"
+        )
+    return Result.passed(rendered if rendered in body else day)
 
 
 @check("incident_cited_only_if_active")
