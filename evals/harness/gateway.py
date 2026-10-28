@@ -31,6 +31,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from packages.agent import prompts
 from packages.shared.llm import Completion, UsageLedger, estimate_tokens
 
 #: What triage returns per scenario. Facts about the ticket, stated once.
@@ -122,15 +123,30 @@ RUN_CITATION = re.compile(r"^(run:[\w.:\-]+):", re.MULTILINE)
 #: the comma that follows it, or the end of the line — not a non-whitespace
 #: run. The eval suite caught both, which is the point of a double that
 #: reads the prompt instead of the scenario id.
+#: Anchored to the start of the line each fact occupies, for the same reason.
+#: An unanchored pattern is a pattern that can match an instruction, a
+#: passage, or a merchant's own sentence — all three are in the prompt, and
+#: two of them are things a person edits without thinking about this file.
 FACT_PATTERNS: dict[str, re.Pattern[str]] = {
     # settlement sett_x: processing, expected 17 October 2026, utr …
     "settlement_status": re.compile(r"^settlement \S+:\s*(\w+),", re.MULTILINE),
-    "expected_at": re.compile(r"expected (.+?),", re.IGNORECASE),
+    "expected_at": re.compile(r"^settlement \S+:[^,\n]*,\s*expected (.+?),", re.MULTILINE),
     # chargeback cb_x: 4853, evidence due 26 October 2026
-    "evidence_due": re.compile(r"evidence due (.+?)\s*$", re.IGNORECASE | re.MULTILINE),
+    "evidence_due": re.compile(r"^chargeback \S+:.*?evidence due (.+?)\s*$", re.MULTILINE),
     # run:refund:rfnd_x: a refund of INR 1,999.00 has been issued against …
-    "refund_amount": re.compile(r"a refund of (.+?) has been issued"),
+    "refund_amount": re.compile(r"^run:\S+: a refund of (.+?) has been issued", re.MULTILINE),
 }
+
+
+def _above_the_fence(user: str) -> str:
+    """The trusted part of a user message: facts and passages, no merchant text.
+
+    `prompts.assemble` puts the facts block first and every untrusted block
+    after it, each opening with ``FENCE``. Cutting there is the same boundary
+    the agent's own containment draws, expressed once.
+    """
+    head, _, _ = user.partition(prompts.FENCE)
+    return head
 
 
 @dataclass
@@ -189,13 +205,29 @@ class HarnessGateway:
     # -- drafting --------------------------------------------------------
 
     def _draft(self, system: str, user: str) -> dict[str, Any]:
-        prompt = f"{system}\n{user}"
-        passages = PASSAGE_LINE.findall(prompt)
-        run_citations = RUN_CITATION.findall(prompt)
+        # Read only from the trusted part of the user message, which is
+        # everything above the first fence. Two different bugs came from
+        # reading more than that.
+        #
+        # The whole prompt was searched until the instruction gained the
+        # phrase "not expected to verify it" and `expected (.+?),` matched
+        # that rather than the settlement line — the system message comes
+        # first, so prose won, and the reply stated a fragment of its own
+        # instructions where a date belonged.
+        #
+        # Narrowing to the user message was not enough either: the ticket
+        # body sits there too, below the fence, and a merchant who writes a
+        # line shaped like a fact line would otherwise choose what the double
+        # extracts. That is the containment the agent itself relies on
+        # (ADR 0005 rule 1), and a double that does not honour it lets fixture
+        # text steer a scenario's result.
+        trusted = _above_the_fence(user)
+        passages = PASSAGE_LINE.findall(trusted)
+        run_citations = RUN_CITATION.findall(trusted)
         facts = {
             name: match.group(1)
             for name, pattern in FACT_PATTERNS.items()
-            if (match := pattern.search(prompt))
+            if (match := pattern.search(trusted))
         }
 
         sentences = [_opening(self.scenario_id, facts)]
