@@ -313,6 +313,13 @@ def render(results: list[ModelResult]) -> str:
                     f"ticket={d.get('ticket_status')}/{d.get('ticket_assignee')}"
                 )
                 lines.append(f"      path: {' -> '.join(d.get('path') or [])}")
+                # What it cited and what it wrote. A grounding verdict of
+                # `invalid_citation` is unactionable without the id the model
+                # invented, and `partial` is unactionable without the prose.
+                lines.append(f"      cited: {d.get('reply_citations') or 'nothing'}")
+                excerpt = (d.get("reply_excerpt") or "").replace("\n", " ").strip()
+                if excerpt:
+                    lines.append(f"      wrote: {excerpt[:200]}")
 
     lines.append("")
     lines.append(

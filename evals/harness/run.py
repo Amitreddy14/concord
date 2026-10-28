@@ -419,6 +419,13 @@ def diagnose(outcome: Outcome) -> dict[str, Any]:
         "ticket_assignee": outcome.ticket.get("assignee"),
         "reply_is_refusal": bool(reply.get("is_refusal")),
         "reply_citations": list(reply.get("citations") or []),
+        # The reply itself, truncated. Three diagnoses in a row have stalled
+        # here: the citations said the draft was refused and nothing said what
+        # the model had written, so distinguishing "stated the fact in another
+        # format" from "never stated the fact" needed another GPU run. An
+        # excerpt is enough to tell those apart and short enough to live in
+        # every report.
+        "reply_excerpt": outcome.reply_text[:400],
         "grounding": (outcome.state.get("grounding") or {}).get("verdict"),
         "outbound_messages": len(outcome.outbound),
         "scopes_used": sorted(outcome.scopes_used),

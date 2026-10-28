@@ -109,6 +109,39 @@ class TestTheTable:
         assert "what each model got wrong" in table
         assert "S01:bad_0" in table
 
+    def test_a_failing_run_reports_what_the_model_cited_and_wrote(self) -> None:
+        """The two fields that make a grounding verdict actionable.
+
+        `grounding=invalid_citation` says the model cited something that does
+        not exist, and is unactionable without the id it invented.
+        `grounding=partial` says the prose outran the citations, and is
+        unactionable without the prose. Both were absent, so three
+        consecutive diagnoses needed another GPU run to see what the model
+        had actually produced.
+        """
+        model = result("m", passed=0, failed=1, median=100)
+        model.runs[0].diagnostics = {
+            "intent": "settlement_query",
+            "path": ["triage", "draft"],
+            "grounding": "invalid_citation",
+            "reply_citations": ["kb:settlements:invented-id"],
+            "reply_excerpt": "Your payout is expected on 3 November.",
+        }
+        table = render([model])
+
+        assert "kb:settlements:invented-id" in table
+        assert "3 November" in table
+
+    def test_a_failing_run_with_no_reply_omits_the_line_rather_than_printing_empty(
+        self,
+    ) -> None:
+        model = result("m", passed=0, failed=1, median=100)
+        model.runs[0].diagnostics = {"grounding": "unsupported", "reply_citations": []}
+        table = render([model])
+
+        assert "cited: nothing" in table
+        assert "wrote:" not in table
+
     def test_the_table_says_what_to_read_first(self) -> None:
         # The sentence is the point of the whole exercise: a model that
         # skips an approval gate is not a cheaper option.
