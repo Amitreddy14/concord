@@ -200,3 +200,61 @@ class TestTheBenchmarkPathUsesOnlyTheProtocol:
         # only place the protocol exposes it.
         failures = [(c.name, c.detail) for r in reports for c in r.failures]
         assert all(r.ok for r in reports), failures
+
+
+class TestTheDenominatorIsFixedInAdvance:
+    """A crash must score worse than a failed assertion, not better.
+
+    The first version counted the checks that ran, so a scenario that
+    errored contributed none — and a model whose run crashed scored 21/27
+    while one whose run merely failed an assertion scored 26/33. The crash
+    looked like the better result, in a table whose entire purpose is
+    comparison.
+    """
+
+    def test_an_errored_scenario_still_owes_its_assertions(self) -> None:
+        crashed = ModelResult(
+            model="crashes",
+            declared_checks=33,
+            runs=[RunReport("S03", "t", "main", checks=[], error="StructuredOutputError")],
+        )
+        assert crashed.checks == 33
+        assert crashed.passed_checks == 0
+        assert crashed.pass_rate == 0
+
+    def test_a_crash_ranks_below_a_failed_assertion(self) -> None:
+        crashed = ModelResult(
+            model="crashes",
+            declared_checks=10,
+            runs=[RunReport("S03", "t", "main", checks=[], error="boom")],
+        )
+        failed_one = ModelResult(
+            model="fails-one",
+            declared_checks=10,
+            runs=[
+                RunReport(
+                    "S03",
+                    "t",
+                    "main",
+                    checks=[CheckReport("a", True, "")] * 9 + [CheckReport("b", False, "d")],
+                )
+            ],
+        )
+        table = render([crashed, failed_one])
+        assert table.index("fails-one") < table.index("crashes")
+
+    def test_an_error_is_named_rather_than_hidden_in_the_denominator(self) -> None:
+        table = render(
+            [
+                ModelResult(
+                    model="m",
+                    declared_checks=6,
+                    runs=[
+                        RunReport("S03", "t", "main", checks=[], error="StructuredOutputError: x")
+                    ],
+                )
+            ]
+        )
+        assert "did not finish" in table
+        assert "S03" in table
+        assert "StructuredOutputError" in table

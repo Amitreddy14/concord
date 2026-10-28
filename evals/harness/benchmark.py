@@ -77,14 +77,31 @@ class ModelResult:
     completion_tokens: int = 0
     vram_used_mib: int | None = None
     vram_total_mib: int | None = None
+    declared_checks: int = 0
+    """Assertions the chosen scenarios declare, set before the runs happen.
+
+    The denominator has to be fixed in advance, and the first version was
+    not: it counted the checks that *ran*, and a scenario that errored
+    contributed none. So a model whose run crashed outright scored 21/27
+    while one whose run merely failed an assertion scored 26/33 — and the
+    crash looked like the better result. The table's whole purpose is
+    comparison, and that made it compare different things.
+    """
 
     @property
     def checks(self) -> int:
-        return sum(len(r.checks) for r in self.runs)
+        # Declared, not observed. An errored scenario still owes its
+        # assertions.
+        return self.declared_checks or sum(len(r.checks) for r in self.runs)
 
     @property
     def passed_checks(self) -> int:
         return sum(1 for r in self.runs for c in r.checks if c.ok)
+
+    @property
+    def errored(self) -> list[str]:
+        """Scenarios that did not finish. Counted as failing every assertion."""
+        return sorted({f"{r.scenario_id} ({r.error})" for r in self.runs if r.error})
 
     @property
     def pass_rate(self) -> float:  # allow-float: a ratio, not an amount
@@ -124,6 +141,7 @@ class ModelResult:
             "vram_total_mib": self.vram_total_mib,
             "headroom_mib": self.headroom_mib,
             "failures": self.failures,
+            "errored": self.errored,
         }
 
 
@@ -250,6 +268,17 @@ def render(results: list[ModelResult]) -> str:
             f"{result.median_ms:>7}ms {result.slowest_ms:>7}ms "
             f"{result.prompt_tokens:>8} {result.completion_tokens:>7} {headroom:>9}"
         )
+
+    # Errors first, because a scenario that did not finish is a different
+    # and worse finding than one that finished and failed an assertion — and
+    # the old table hid it entirely behind a smaller denominator.
+    erroring = [r for r in results if r.available and r.errored]
+    if erroring:
+        lines.append("")
+        lines.append("  scenarios that did not finish (every assertion counted failed):")
+        for result in erroring:
+            for entry in result.errored:
+                lines.append(f"    {result.model}: {entry}")
 
     failing = [r for r in results if r.available and r.failures]
     if failing:
