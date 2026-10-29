@@ -474,6 +474,69 @@ def reviewer_note_attached_to_ticket(outcome: Outcome, _assertion: Assertion) ->
     return Result.passed("the note reached the ticket")
 
 
+@check("approval_outcome_reached_the_merchant")
+def approval_outcome_reached_the_merchant(outcome: Outcome, _assertion: Assertion) -> Result:
+    """A run that ended without the action must say so to the merchant.
+
+    Found by the demo walkthrough, not by this suite. A merchant whose
+    ₹41,200.00 refund a reviewer declined was sent "Thanks for getting in
+    touch. Let me know if anything is unclear." — true, fluent, and silent
+    about the only thing they wrote in about.
+
+    `gate._approval_outcome` already separated rejected from expired, on the
+    stated grounds that "they are different things to tell a merchant: one is
+    a decision, the other is a queue that failed them". Nothing then told the
+    merchant either, because the facts block reported only actions that had
+    happened and a declined refund is an action that did not.
+    """
+    approval = outcome.state.get("approval") or {}
+    status = str(approval.get("status", ""))
+    if status not in {"rejected", "expired"}:
+        return Result.passed(f"no unfulfilled approval on this run (status {status or 'none'})")
+
+    posted = outcome.outbound
+    if not posted:
+        return Result.failed(
+            f"the approval was {status} and nothing was sent to the merchant, so the ticket "
+            "closes on a request they were never answered about"
+        )
+
+    body = " ".join(str(m.get("body", "")) for m in posted).lower()
+    # The claim, not a form of words: the reply has to say a refund was not
+    # issued. Matching on the outcome's own vocabulary rather than a template
+    # so a differently-worded reply that makes the point still passes.
+    if "no refund" not in body and "not been issued" not in body and "declined" not in body:
+        return Result.failed(
+            f"the approval was {status} and the reply says nothing about it: {body[:160]!r}"
+        )
+    return Result.passed(f"the merchant was told the request was {status}")
+
+
+@check("reviewer_note_never_reaches_the_merchant")
+def reviewer_note_never_reaches_the_merchant(outcome: Outcome, _assertion: Assertion) -> Result:
+    """The other half, and the one that matters more.
+
+    A reviewer's note exists for the audit trail and the console, and a
+    tenant requires one on exactly the outcomes a merchant is most likely to
+    ask about (`require_reviewer_note_on`). It is internal. Telling the
+    merchant the outcome and telling them the reasoning behind it are
+    different disclosures, and the second is not ours to make.
+
+    This is the assertion that makes the previous one safe to satisfy: the
+    cheapest way to tell a merchant why their refund was declined is to quote
+    the note, and it is the wrong way.
+    """
+    notes = [r.reviewer_note for r in getattr(outcome.approvals, "all", list)() if r.reviewer_note]
+    if not notes:
+        return Result.passed("no reviewer note was recorded on this run")
+
+    body = " ".join(str(m.get("body", "")) for m in outcome.outbound)
+    leaked = [note for note in notes if note and note in body]
+    if leaked:
+        return Result.failed(f"a reviewer's internal note was sent to the merchant: {leaked!r}")
+    return Result.passed(f"{len(notes)} reviewer note(s) stayed internal")
+
+
 @check("survives_process_restart_while_pending")
 def survives_process_restart_while_pending(outcome: Outcome, _assertion: Assertion) -> Result:
     """Checked by the runner, which rebuilds the graph against the same saver.

@@ -135,6 +135,8 @@ FACT_PATTERNS: dict[str, re.Pattern[str]] = {
     "evidence_due": re.compile(r"^chargeback \S+:.*?evidence due (.+?)\s*$", re.MULTILINE),
     # run:refund:rfnd_x: a refund of INR 1,999.00 has been issued against …
     "refund_amount": re.compile(r"^run:\S+: a refund of (.+?) has been issued", re.MULTILINE),
+    # run:approval:apr_x: this request was reviewed by a person and declined, …
+    "approval_outcome": re.compile(r"^run:approval:\S+: (this request was [^.]+)", re.MULTILINE),
 }
 
 
@@ -231,7 +233,13 @@ class HarnessGateway:
         }
 
         sentences = [_opening(self.scenario_id, facts)]
-        if run_citations:
+        if facts.get("approval_outcome"):
+            # The run ended without the action. A reply that does not say so
+            # is the failure the demo walkthrough surfaced: a merchant whose
+            # refund a reviewer declined was told "Thanks for getting in
+            # touch. Let me know if anything is unclear."
+            sentences.append(_approval_sentence(facts))
+        elif run_citations:
             # The run did something. A reply that does not say so is the
             # failure S09 exists to catch.
             sentences.append(_refund_sentence(facts))
@@ -244,6 +252,17 @@ class HarnessGateway:
             "citations": [*passages, *run_citations],
             "unsupported_claims": [],
         }
+
+
+def _approval_sentence(facts: dict[str, str]) -> str:
+    """State the outcome, in the facts block's own words.
+
+    Taken from the fact rather than composed here, for the same reason the
+    amount is: a stand-in that writes its own version of what happened is
+    testing its own prose instead of the agent's wiring.
+    """
+    outcome = facts["approval_outcome"]
+    return f"{outcome[:1].upper()}{outcome[1:]}."
 
 
 def _refund_sentence(facts: dict[str, str]) -> str:

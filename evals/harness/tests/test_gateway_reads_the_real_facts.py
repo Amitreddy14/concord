@@ -77,6 +77,11 @@ def test_every_pattern_finds_something_in_a_populated_facts_block() -> None:
     state = {
         **STATE,
         "refund": {"refund_id": "rfnd_1", "amount": {"amount_minor": 199900, "currency": "INR"}},
+        # A rejected approval and an issued refund do not co-occur in a real
+        # run — one is what happened instead of the other. Both are here
+        # because this test is about the patterns having something to match,
+        # not about a reachable state.
+        "approval": {"approval_id": "apr_1", "status": "rejected"},
     }
     from packages.agent.nodes import draft_facts
 

@@ -231,7 +231,10 @@ Be direct and plain. No boilerplate apology."""
 # run had just issued, and the claim about that refund would come back
 # unsupported.
 PASSAGES_LABEL = "[supporting passages]"
-ACTIONS_LABEL = "[what you have already done for this merchant]"
+# Renamed from "[what you have already done for this merchant]" once a
+# declined approval started appearing here: a reviewer refusing a refund is
+# something that happened on the ticket, not something the agent did.
+ACTIONS_LABEL = "[what has happened on this ticket]"
 
 DRAFT_CONTRACT = """\
 Return a single JSON object matching the schema.
@@ -239,7 +242,7 @@ Return a single JSON object matching the schema.
 - reply: the message text only. No citation markers, no ids, no footnotes.
 - citations: the ids you relied on, as a list of strings. Every id is already \
   written for you at the start of a line under [supporting passages] or under \
-  [what you have already done for this merchant]. Copy them exactly. Do not \
+  [what has happened on this ticket]. Copy them exactly. Do not \
   compose, shorten or invent an id, and do not cite one that is not there.
 - unsupported_claims: anything you wanted to say and could not support. Not \
   the merchant's own statements, and empty if you held nothing back.
@@ -348,6 +351,31 @@ async def verify_grounding(state: AgentState, context: NodeContext) -> dict[str,
     }
 
 
+#: Approval outcomes that ended the run without the action being taken, and
+#: what each one means to the merchant. `_approval_outcome` in `gate.py`
+#: already keeps these apart, on the grounds that "they are different things
+#: to tell a merchant: one is a decision, the other is a queue that failed
+#: them" — and then nothing told the merchant either, because the facts block
+#: reported only actions that happened. A refund that was declined left the
+#: drafter with no fact about the outcome at all, and the reply it wrote was
+#: "Thanks for getting in touch. Let me know if anything is unclear."
+#:
+#: The wording is the outcome and nothing else. The approval payload in state
+#: carries `reviewer_note`, which exists for the audit trail and for the
+#: console, and which a tenant requires on exactly the outcomes below
+#: (`require_reviewer_note_on`). It is internal. It does not go in the facts
+#: block, so it cannot reach a reply.
+UNFULFILLED_APPROVAL = {
+    "rejected": (
+        "this request was reviewed by a person and declined, so no refund has been issued"
+    ),
+    "expired": (
+        "this request was not reviewed before it expired, so no refund has been issued and "
+        "a person is picking the ticket up"
+    ),
+}
+
+
 def action_citations(state: AgentState) -> list[str]:
     """Citation ids for what this run performed, evidenced by its own ledger.
 
@@ -358,6 +386,9 @@ def action_citations(state: AgentState) -> list[str]:
     refund = state.get("refund") or {}
     if refund.get("refund_id"):
         ids.append(f"{grounding.SELF_EVIDENT_PREFIX}refund:{refund['refund_id']}")
+    approval = state.get("approval") or {}
+    if str(approval.get("status", "")) in UNFULFILLED_APPROVAL and approval.get("approval_id"):
+        ids.append(f"{grounding.SELF_EVIDENT_PREFIX}approval:{approval['approval_id']}")
     return ids
 
 
@@ -382,5 +413,16 @@ def action_facts(state: AgentState) -> list[str]:
             f"{refund.get('capture_id', 'unknown')}"
             + (" (this was already in flight; it has not been issued twice)" if replayed else "")
             + ". Cite this id when you tell the merchant about it."
+        )
+
+    # And what did not happen, where that is the answer. Only the outcome —
+    # never `reviewer_note`, which is internal.
+    approval = state.get("approval") or {}
+    outcome = UNFULFILLED_APPROVAL.get(str(approval.get("status", "")))
+    if outcome and approval.get("approval_id"):
+        facts.append(
+            f"{grounding.SELF_EVIDENT_PREFIX}approval:{approval['approval_id']}: {outcome}. "
+            "Tell the merchant this and cite this id. Do not speculate about why, and do not "
+            "promise that it will be reconsidered."
         )
     return facts
