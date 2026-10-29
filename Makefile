@@ -145,6 +145,12 @@ benchmark: require-python ## Benchmark the local model shortlist (needs a GPU an
 		$(if $(SCENARIOS),--scenarios $(SCENARIOS)) \
 		--report evals/reports
 
+.PHONY: demo
+demo: require-python ## Narrated walkthrough of S02, S04, S09, S10 (no GPU needed)
+	$(PY) -m evals.harness.demo \
+		$(if $(MODEL),--model $(MODEL)) \
+		$(if $(SCENARIOS),--scenarios $(SCENARIOS))
+
 .PHONY: clean
 clean: ## Remove caches and build artifacts
 	find . -type d -name __pycache__ -prune -exec rm -rf {} +

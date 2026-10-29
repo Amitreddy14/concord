@@ -416,6 +416,11 @@ def diagnose(outcome: Outcome) -> dict[str, Any]:
         "path": list(outcome.state.get("visited") or ()),
         "permission": outcome.decision.get("permission"),
         "risk_tier": outcome.decision.get("risk_tier"),
+        # Why, in the engine's own words. A rule id says which rule decided
+        # and the reasons say what it decided about — the difference between
+        # "R2-elevated-refund" and "₹8,400.00 is above the growth-tier
+        # autonomy cap of ₹5,000.00". A reviewer reads the second.
+        "decision_reasons": list(outcome.decision.get("reasons") or []),
         "ticket_status": outcome.ticket.get("status"),
         "ticket_assignee": outcome.ticket.get("assignee"),
         "reply_is_refusal": bool(reply.get("is_refusal")),
