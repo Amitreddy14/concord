@@ -1,0 +1,139 @@
+# Tenant configuration for the second deployment.
+#
+# Exists to prove the claim ADR 0006 principle 5 makes: a customer is a file,
+# not a branch. Nothing in `packages/` names this tenant, and a test asserts
+# that (`test_no_tenant_specific_branch`).
+#
+# Northwind is deliberately the opposite of Acme wherever a policy value can
+# differ, because a second tenant that agrees with the first proves nothing —
+# an engine ignoring configuration entirely would pass. The conformance suite
+# in `evals/golden/conformance.yaml` records where the two decide differently
+# and requires that each configured difference shows up in at least one case.
+#
+# The profile is a conservative European acquirer: shorter window, much lower
+# autonomy, and no reason code that lets a refund go out without a human
+# except an outright duplicate charge.
+tenant_id: northwind-pay
+display_name: Northwind Pay
+locale: en-IE
+timezone: Europe/Dublin
+default_currency: EUR
+
+refund_policy:
+  # 90 days, half of Acme's. The divergence this creates is deliberate: a
+  # capture 120 days old is refundable for Acme and outside the window here.
+  window_days: 90
+  # An order of magnitude below Acme's, and in EUR. The caps are what a
+  # reviewer-heavy desk looks like in configuration.
+  autonomy_cap_minor:
+    standard: 25000       # €250.00
+    growth: 50000         # €500.00
+    enterprise: 100000    # €1,000.00
+  # Only an outright duplicate charge goes out without a human. A buyer
+  # changing their mind is a judgement call here, where Acme treats it as
+  # routine.
+  autonomous_reason_codes: [duplicate]
+  multi_capture_requires_approval: true
+
+risk_tiers:
+  # Same ordering discipline as Acme: compliance and dispute above the refund
+  # tiers so a refund touching them cannot match a permissive tier first.
+  #
+  # The structural difference is the last tier. Acme's `R1-routine-refund`
+  # grants `approval: none`; the equivalent here routes to a reviewer, so this
+  # tenant never refunds autonomously on a judgement-based reason. It is kept
+  # as a tier rather than deleted on purpose — removing it would leave the
+  # table with a gap, and the engine refuses on a gap (correctly: a missing
+  # tier must not grant autonomy). A tenant that wants a human in the loop
+  # says so with `approval`, not by omission.
+  - id: R3-compliance
+    when: { touches: [kyc, payout_hold, sanctions] }
+    approval: forbidden
+  - id: R4-dispute
+    when: { touches: [chargeback] }
+    approval: specialist_queue
+  - id: R0-informational
+    when: { mutating: false }
+    approval: none
+  - id: R2a-multi-capture
+    when: { action: create_refund, spans_multiple_captures: true }
+    approval: reviewer
+  - id: R2b-non-autonomous-reason
+    when: { action: create_refund, reason_in_autonomous_set: false }
+    approval: reviewer
+  - id: R2-elevated-refund
+    when: { action: create_refund, within_autonomy_cap: false }
+    approval: reviewer
+  - id: R1-reviewed-refund
+    when: { action: create_refund, within_autonomy_cap: true, reason_in_autonomous_set: true }
+    approval: reviewer
+
+forbidden_actions:
+  - lift_payout_hold
+  - change_kyc_status
+  - alter_settlement_schedule
+  - accept_chargeback
+  - modify_merchant_tier
+
+approvals:
+  # A different queue and a tighter expiry, which the sweep reads from
+  # configuration (ADR 0007) rather than from a constant.
+  reviewer_queue: eu-payments-review
+  expires_after_hours: 24
+  on_expiry: abandon_and_escalate
+  require_reviewer_note_on: [rejected, modified, approved]
+
+disclosure:
+  # Stricter than Acme on every axis. A payout hold reason is not disclosed at
+  # all here, where Acme gives the category.
+  payout_hold_reason: none
+  kyc_review_detail: none
+  incident_detail: customer_safe_summary_only
+
+grounding:
+  require_citations: true
+  # A higher bar than Acme's 0.45, so a weak passage match is a refusal here
+  # where it would be an answer there.
+  min_passage_score: 0.6
+  refuse_when_unsupported: true
+  corpus:
+    - doc_type: policy
+      source: infra/corpus/northwind/policy
+    - doc_type: help_centre
+      source: infra/corpus/northwind/help
+
+sla:
+  first_response_minutes:
+    standard: 240
+    growth: 120
+    enterprise: 30
+  escalate_on_repeat_contacts: 2
+
+tool_scopes:
+  # Narrower than Acme: this tenant does not enable chargeback reads, because
+  # its disputes desk is a separate team and the agent has no part in them.
+  # The R4 tier still routes dispute work to that queue — routing a ticket
+  # away is not the same as being able to read the dispute.
+  - crm:merchant:read
+  - crm:note:write
+  - payments:payment:read
+  - payments:capture:read
+  - payments:refund:read
+  - payments:refund:write
+  - payments:settlement:read
+  - ticketing:ticket:read
+  - ticketing:ticket:write
+  - ticketing:message:write
+  - ticketing:assign:write
+  - knowledge:search
+
+reply_style:
+  tone: formal
+  max_words: 140
+  sign_off: "Northwind Pay Support"
+  prohibited_commitments:
+    - specific_callback_time
+    - goodwill_credit
+    - fee_waiver
+    - delivery_date_for_unresolved_incident
+    - compensation_for_delay

@@ -73,6 +73,17 @@ branches:
       - assert: ticket_status_is
         value: escalated
       - assert: reviewer_note_attached_to_ticket
+      # Added after the demo walkthrough showed what this branch actually
+      # sent: "Thanks for getting in touch. Let me know if anything is
+      # unclear." The branch asserted the refund did not happen, the ticket
+      # escalated and the note reached the ticket — and nothing asserted the
+      # merchant was told the outcome of the only thing they asked for.
+      - assert: approval_outcome_reached_the_merchant
+      # And the pair to it. The cheapest way to tell a merchant why a refund
+      # was declined is to quote the reviewer's note, and the note is
+      # internal. Telling them the outcome and telling them the reasoning
+      # are different disclosures.
+      - assert: reviewer_note_never_reaches_the_merchant
   modified:
     reviewer_amount: { amount_minor: 2060000, currency: INR }
     must:
@@ -81,6 +92,10 @@ branches:
       - assert: refund_amount_equals
         value: { amount_minor: 2060000, currency: INR }
       - assert: ledger_records_both_proposed_and_modified_action
+      # This tenant requires a reviewer note on `modified` as well as on
+      # `rejected`, so this branch can leak one too — and here the reply does
+      # reach the merchant, which makes it the likelier of the two.
+      - assert: reviewer_note_never_reaches_the_merchant
   expired:
     must:
       - assert: refund_count_equals
@@ -89,6 +104,12 @@ branches:
         value: abandoned
       - assert: ticket_status_is
         value: escalated
+      # Expiry is the outcome a merchant is least able to guess at: nobody
+      # decided anything, and a ticket that goes quiet is indistinguishable
+      # from one that was forgotten. `gate._approval_outcome` keeps this
+      # apart from `rejected` on exactly that ground — "one is a decision,
+      # the other is a queue that failed them".
+      - assert: approval_outcome_reached_the_merchant
 
 should:
   - approval_payload_includes_evidence: [capture, policy_rule, merchant_tier, window_check]

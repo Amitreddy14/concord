@@ -26,7 +26,11 @@ from packages.agent.nodes import (
 )
 from packages.agent.state import AgentState, DraftResult
 
-REFUND = {"refund_id": "re_1", "amount": {"minor": 500, "currency": "USD"}}
+# A valid money payload: the contract's key is `amount_minor`. Written as
+# `minor` here until the conformance suite caught it, which meant
+# `action_facts` was taking its "amount could not be read" fallback and
+# these tests were passing without ever rendering an amount.
+REFUND = {"refund_id": "re_1", "amount": {"amount_minor": 500, "currency": "USD"}}
 
 PASSAGE = {
     "passage_id": "kb:payouts:hold-review-window",

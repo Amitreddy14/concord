@@ -43,3 +43,9 @@ htmlcov/
 
 # Local virtualenv used during development
 .venv/
+
+# Written by `make freeze` for an air-gapped install. Generated from a venv
+# that passed `make check` at a specific tag, so it is an artefact of a
+# deployment rather than a fact about the project — see
+# docs/runbooks/deployment-air-gapped.md.
+requirements.lock
