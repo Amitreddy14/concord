@@ -107,11 +107,12 @@ infra/          Compose stack, migrations, local bootstrap
 
 ## Status
 
-Phases 0–8 complete. The model choice is recorded in
+All ten phases complete. The model choice is recorded in
 [ADR 0010](docs/adr/0010-qwen3-is-the-default-and-the-gates-are-why-either-model-works.md):
 `qwen3:8b` by default, `llama3.1:8b` as the low-latency alternative, and the deterministic gates
-as a precondition for either. Phase 9 next. See [docs/roadmap.md](docs/roadmap.md) for the full
-plan and the definition of done for each phase.
+as a precondition for either. Start with [docs/write-up.md](docs/write-up.md) for the argument,
+the measured results and the known limits; [docs/roadmap.md](docs/roadmap.md) has each phase's
+definition of done and what building it actually found.
 
 | Phase | Title | State |
 | --- | --- | --- |
@@ -123,8 +124,8 @@ plan and the definition of done for each phase.
 | 5 | Multi-agent graph | complete |
 | 6 | Policy, risk tiering, human approval | complete |
 | 7 | Failure engineering | complete |
-| 8 | Evaluation and observability | complete (model ADR pending a benchmark run) |
-| 9 | Tenant onboarding and deployment | next |
+| 8 | Evaluation and observability | complete |
+| 9 | Tenant onboarding and deployment | complete |
 
 ---
 
@@ -171,7 +172,14 @@ measured decode rate, which the eval harness uses as its latency baseline.
 
 ## Reading order for reviewers
 
-1. [docs/scenarios.md](docs/scenarios.md) — the twelve tickets that define scope
-2. [docs/domain-model.md](docs/domain-model.md) — entities, states and money handling
-3. [docs/adr/](docs/adr/) — why the system is shaped this way
-4. [contracts/](contracts/) — the interfaces the agent is written against
+Start with `make demo`. It needs no GPU and prints what the system does, read from the runs' own
+state rather than from a script.
+
+1. [docs/write-up.md](docs/write-up.md) — the argument, the measured results, and the known limits
+2. [docs/scenarios.md](docs/scenarios.md) — the twelve tickets that define scope
+3. [docs/domain-model.md](docs/domain-model.md) — entities, states and money handling
+4. [docs/adr/](docs/adr/) — why the system is shaped this way, in ten decisions
+5. [contracts/](contracts/) — the interfaces the agent is written against
+
+Runbooks: [onboarding a tenant](docs/runbooks/tenant-onboarding.md) ·
+[deploying without egress](docs/runbooks/deployment-air-gapped.md)

@@ -265,3 +265,29 @@ the facts nor the corpus.
 
 **Done when** the second tenant passes the suite with its own expectations, and a reader can
 bring the system up and run the demo from the README alone.
+
+**Delivered.** `northwind-pay` is a second tenant in configuration only — 90-day window against
+180, caps an order of magnitude lower in EUR, and `duplicate` as the only reason code that
+releases a refund without a human. A conformance suite decides ten policy cases and four scope
+cases against both tenants, with every expectation hand-written from reading the tenant files
+rather than recorded from the engine, and a divergence table requiring each configured difference
+to change an outcome somewhere. An AST walk over `packages/` fails if a tenant id, display name or
+sign-off appears as code.
+
+Writing the deliverables found more than building them did. The no-tenant-branch guard was a grep
+first and fired on the docstring explaining the bug it guards — the same mistake `check_money.py`
+was rewritten to avoid. Two rule constants turned out to be vestiges of the design Phase 6
+replaced, defined and unreferenced for three phases, naming the superseded approach where the
+engine decided approval itself. Two test fixtures were passing while silently taking an exception
+fallback, because they spelled a money payload key wrong.
+
+And the narrated walkthrough exposed, on its first run, a defect 541 tests could not see: a
+merchant whose refund a reviewer declined was sent "Thanks for getting in touch. Let me know if
+anything is unclear." The branch asserted the refund had not happened, the ticket had escalated,
+and the reviewer's note had reached the ticket. All three passed. None of them was about the
+merchant. `gate._approval_outcome` had already separated rejected from expired on the stated
+grounds that they are "different things to tell a merchant" — and then nothing told the merchant
+either.
+
+The README was missing the step that creates the virtualenv, which is the one Phase 9's done-when
+depends on most directly.
