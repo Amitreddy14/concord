@@ -96,7 +96,15 @@ def _decision_block(diagnostics: dict[str, Any]) -> list[str]:
     return lines
 
 
-def _run_block(report: RunReport) -> list[str]:
+def _run_block(report: RunReport, *, decided_above: list[str] | None = None) -> list[str]:
+    """One run, rendered.
+
+    ``decided_above`` is the decision block already printed for this
+    scenario. A branch resumes from the same checkpoint as the main run, so
+    its decision is identical by construction — printing it four more times
+    says nothing and buries the thing that does differ, which is what the
+    reviewer did and what the merchant got.
+    """
     d = report.diagnostics or {}
     passed = sum(1 for c in report.checks if c.ok)
     lines = [f"  {report.label}"]
@@ -107,11 +115,16 @@ def _run_block(report: RunReport) -> list[str]:
 
     lines.append(_field("intent", str(d.get("intent"))))
     lines.append(_field("path", " -> ".join(d.get("path") or [])))
-    lines.extend(_decision_block(d))
+    decision = _decision_block(d)
+    if decided_above is not None and decision == decided_above:
+        lines.append(_field("decision", "as above — resumed from the same checkpoint"))
+    else:
+        lines.extend(decision)
 
     refunds = d.get("refunds") or 0
     if refunds:
-        lines.append(_field("money", f"{refunds} refund(s) issued"))
+        noun = "refund" if refunds == 1 else "refunds"
+        lines.append(_field("money", f"{refunds} {noun} issued"))
     assignee = d.get("ticket_assignee") or "unassigned"
     lines.append(_field("ticket", f"{d.get('ticket_status')} · {assignee}"))
 
@@ -138,7 +151,7 @@ def _scenario_summary(scenario_id: str, reports: list[RunReport]) -> list[str]:
         totals = {(r.diagnostics or {}).get("refunds", 0) for r in reports}
         return [
             "",
-            f"  across {len(reports)} runs of the same ticket, each with the gateway timing out "
+            f"  Across {len(reports)} runs of the same ticket, each with the gateway timing out "
             f"mid-refund, the number of refunds on the capture was {sorted(totals)} — "
             "the derived idempotency key is what makes a retry safe rather than hopeful.",
         ]
@@ -146,7 +159,7 @@ def _scenario_summary(scenario_id: str, reports: list[RunReport]) -> list[str]:
         branches = [r.label.replace("branch: ", "") for r in reports if "branch" in r.label]
         return [
             "",
-            f"  the run paused and was resumed four ways — {', '.join(branches)} — from the "
+            f"  The run paused and was resumed four ways — {', '.join(branches)} — from the "
             "same checkpoint. `expired` is the one worth watching: nobody acted, and the "
             "run abandoned the proposal and escalated rather than waiting forever.",
         ]
@@ -164,13 +177,13 @@ def _scenario_summary(scenario_id: str, reports: list[RunReport]) -> list[str]:
             # than leaving a reader to notice: the engine priced the cap off
             # the CRM's tier, not the ticket's claim about it.
             lines.append(
-                "the cap it was measured against is the standard-tier one. The merchant's "
+                "The cap it was measured against is the standard-tier one. The merchant's "
                 "tier was read from the CRM, because an identifier or an attribute arriving "
                 "in merchant text is re-validated against the system of record and never "
                 "trusted as given (ADR 0005, rule 3)."
             )
         lines.append(
-            f"the scopes the run used: {', '.join(scopes) or 'none'}. Nothing derived from a "
+            f"The scopes the run used: {', '.join(scopes) or 'none'}. Nothing derived from a "
             "ticket can widen that set — scope comes from tenant configuration, and the "
             "injection's success or failure at confusing the model does not change what a "
             "confused model is able to do (ADR 0005, rule 4)."
@@ -183,6 +196,59 @@ async def _reports(scenario: Scenario, model: str | None, base_url: str) -> list
     if model:
         return await run_scenario_with_model(scenario, model=model, base_url=base_url)
     return await run_scenario(scenario)
+
+
+def _render_runs(reports: list[RunReport]) -> int:
+    """Print every run, collapsing repeats that produced identical output.
+
+    Two kinds of redundancy, and they need different handling.
+
+    A *branch* resumes from the same checkpoint as the main run, so its
+    decision is identical by construction; the rest of it — what the reviewer
+    did, what the merchant got — is the point. Its decision line is replaced
+    by a pointer upward.
+
+    A *repeat* re-runs the whole scenario. S09 runs five times and asserts the
+    outcomes are identical, so five identical blocks are one result restated
+    five times. Only the first is printed and the rest are counted, and a
+    repeat that *differs* is printed in full, which is the case the collapsing
+    must not hide.
+    """
+    failures = 0
+    main_decision: list[str] | None = None
+    previous: list[str] | None = None
+    identical = 0
+
+    for index, report in enumerate(reports):
+        is_branch = report.label.startswith("branch")
+        block = _run_block(report, decided_above=main_decision if is_branch else None)
+        failures += sum(1 for c in report.checks if not c.ok) + bool(report.error)
+        body = block[1:]
+
+        if previous is not None and body == previous and report.label.startswith("repeat"):
+            identical += 1
+            continue
+
+        if identical:
+            print(_note(f"the next {identical} runs produced identical output.") + "\n")
+            identical = 0
+
+        print("\n".join(block))
+        print()
+        previous = body
+        if index == 0:
+            main_decision = _decision_block(report.diagnostics or {})
+
+    if identical:
+        plural = "run" if identical == 1 else "runs"
+        print(
+            _note(
+                f"the remaining {identical} {plural} produced identical output, which is what "
+                "this scenario asserts."
+            )
+            + "\n"
+        )
+    return failures
 
 
 async def main_async(argv: list[str] | None = None) -> int:
@@ -222,10 +288,7 @@ async def main_async(argv: list[str] | None = None) -> int:
         print()
 
         reports = await _reports(scenario, args.model, args.base_url)
-        for report in reports:
-            print("\n".join(_run_block(report)))
-            print()
-            failures += sum(1 for c in report.checks if not c.ok) + bool(report.error)
+        failures += _render_runs(reports)
 
         paragraphs = [p for p in _scenario_summary(scenario_id, reports) if p.strip()]
         for paragraph in paragraphs:
