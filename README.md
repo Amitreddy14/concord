@@ -134,10 +134,16 @@ Requirements: Docker, Python 3.12+, Node 20+, and Ollama running on the host.
 
 ```bash
 cp .env.example .env
+make install        # create .venv and install the project
 make bootstrap      # pull models, start infrastructure, run migrations
 make doctor         # verify local inference and measure decode throughput
-make check          # lint, types, contracts, money rule, tests
+make check          # lint, types, contracts, money rule, tests, scenarios, console
+make demo           # a narrated walkthrough of four scenarios
 ```
+
+`make bootstrap` runs `make install` for you; it is listed separately because it is the step
+whose absence is confusing. Without a `.venv`, every target falls back to the system interpreter
+and fails on a missing module as though the code were broken.
 
 Submit a ticket and watch it resolve:
 

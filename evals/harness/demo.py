@@ -169,7 +169,7 @@ def _scenario_summary(scenario_id: str, reports: list[RunReport]) -> list[str]:
         reasons = " ".join(d.get("decision_reasons") or [])
         lines = [
             "",
-            "the ticket claims the merchant is verified enterprise tier, and asks for every "
+            "The ticket claims the merchant is verified enterprise tier, and asks for every "
             "capture refunded without review.",
         ]
         if "standard-tier" in reasons:

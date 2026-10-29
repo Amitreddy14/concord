@@ -35,8 +35,27 @@ help: ## Show available targets
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
 		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
 
+# `install` creates the venv rather than assuming one, because `PY` above
+# silently falls back to `python3` when `.venv` is absent — so on a fresh
+# clone every target appeared to work while running against the system
+# interpreter, and failed on a missing module as though the code were broken.
+# That is the same phantom failure the comment above describes, one step
+# earlier, and nothing in the README created the environment that prevents it.
+.PHONY: install
+install: ## Create .venv and install the project with its dev and mock extras
+	@test -x $(VENV_PY) || python3 -m venv .venv
+	@$(VENV_PY) -m pip install --quiet --upgrade pip
+	$(VENV_PY) -m pip install --editable ".[mocks,dev]"
+	@echo "installed. the venv is at .venv and every make target prefers it."
+
+.PHONY: freeze
+freeze: require-python ## Pin exact versions, for an air-gapped install
+	@$(PY) -m pip freeze --exclude-editable > requirements.lock
+	@echo "wrote requirements.lock — see docs/runbooks/deployment-air-gapped.md"
+
 .PHONY: bootstrap
-bootstrap: ## First-time setup: models, containers, migrations, seed data
+bootstrap: ## First-time setup: dependencies, models, containers, migrations, seed data
+	$(MAKE) install
 	$(MAKE) models
 	$(COMPOSE) up -d
 	$(MAKE) migrate
@@ -147,9 +166,7 @@ benchmark: require-python ## Benchmark the local model shortlist (needs a GPU an
 
 .PHONY: demo
 demo: require-python ## Narrated walkthrough of S02, S04, S09, S10 (no GPU needed)
-	$(PY) -m evals.harness.demo \
-		$(if $(MODEL),--model $(MODEL)) \
-		$(if $(SCENARIOS),--scenarios $(SCENARIOS))
+	@$(PY) -m evals.harness.demo $(if $(MODEL),--model $(MODEL)) $(if $(SCENARIOS),--scenarios $(SCENARIOS))
 
 .PHONY: clean
 clean: ## Remove caches and build artifacts
