@@ -168,6 +168,10 @@ benchmark: require-python ## Benchmark the local model shortlist (needs a GPU an
 demo: require-python ## Narrated walkthrough of S02, S04, S09, S10 (no GPU needed)
 	@$(PY) -m evals.harness.demo $(if $(MODEL),--model $(MODEL)) $(if $(SCENARIOS),--scenarios $(SCENARIOS))
 
+.PHONY: demo-transcript
+demo-transcript: require-python ## Regenerate docs/demo-transcript.md from a real run
+	@$(PY) -m evals.harness.demo --write-transcript docs/demo-transcript.md
+
 .PHONY: clean
 clean: ## Remove caches and build artifacts
 	find . -type d -name __pycache__ -prune -exec rm -rf {} +
