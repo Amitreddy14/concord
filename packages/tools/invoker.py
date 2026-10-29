@@ -276,7 +276,14 @@ class ToolInvoker:
         headers = {CORRELATION_HEADER: correlation_id}
         if idempotency_key is not None:
             headers[IDEMPOTENCY_HEADER] = idempotency_key
-        if spec.name == "post_message" and self.tenant.requires_citations:
+        if (
+            spec.name == "post_message"
+            and self.tenant.requires_citations
+            # A message that asserts nothing carries no obligation to cite.
+            # The requirement exists so a claim is grounded, and a question
+            # makes no claim — see PostMessageArgs.asserts_facts.
+            and payload.get("asserts_facts", True)
+        ):
             headers["X-Require-Citations"] = "true"
 
         try:

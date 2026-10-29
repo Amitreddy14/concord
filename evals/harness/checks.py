@@ -33,9 +33,11 @@ from typing import Any
 
 from evals.fixtures import Assertion
 from evals.harness.outcome import Outcome
+from packages.shared.dates import format_day
 from packages.shared.ledger import StepKind
 from packages.shared.money import Money
 from packages.tools import registry
+from packages.tools.incidents import is_active
 
 
 @dataclass(frozen=True, slots=True)
@@ -776,26 +778,56 @@ def reply_states_settlement_status_from_system(outcome: Outcome, assertion: Asse
     return Result.passed(wanted)
 
 
+def _day_and_rendering(wanted: str) -> tuple[str, str] | None:
+    """The two spellings of an expected date, or None if it is not one.
+
+    Returned rather than raised because a check must always produce a
+    ``Result``: a fixture holding a malformed date is a fixture bug and
+    belongs in the report as a named failure, not as a traceback that takes
+    the rest of the suite with it. The totality test is what found this.
+    """
+    try:
+        return wanted[:10], format_day(wanted)
+    except ValueError:
+        return None
+
+
 @check("reply_states_expected_at_from_system")
 def reply_states_expected_at_from_system(outcome: Outcome, assertion: Assertion) -> Result:
     wanted = str(assertion.value)
     body = " ".join(str(m.get("body", "")) for m in outcome.outbound) or outcome.reply_text
-    day = wanted[:10]
-    if day not in str([s for s in outcome.state.get("settlements") or []]):
-        return Result.failed(f"no settlement the run read expects {day}")
-    if day not in body:
-        return Result.failed(f"the reply never states the expected date {day}")
-    return Result.passed(day)
+    if wanted[:10] not in str([s for s in outcome.state.get("settlements") or []]):
+        return Result.failed(f"no settlement the run read expects {wanted[:10]}")
+    # Either rendering states the date. This check is named for the claim,
+    # not the format: the ISO day is what the record holds, and the rendered
+    # day is what the facts block now hands the drafter to copy. Demanding
+    # `2026-10-17` in a merchant's inbox would be the harness dictating how
+    # the product writes. Only those two, both denoting exactly this day —
+    # "mid-October" is not a date.
+    spellings = _day_and_rendering(wanted)
+    if spellings is None:
+        return Result.failed(f"the fixture's expected_at is not a timestamp: {wanted!r}")
+    day, rendered = spellings
+    if day not in body and rendered not in body:
+        return Result.failed(
+            f"the reply never states the expected date {day} (as {day!r} or {rendered!r})"
+        )
+    return Result.passed(rendered if rendered in body else day)
 
 
 @check("reply_states_evidence_deadline")
 def reply_states_evidence_deadline(outcome: Outcome, assertion: Assertion) -> Result:
     wanted = str(assertion.value)
     body = " ".join(str(m.get("body", "")) for m in outcome.outbound) or outcome.reply_text
-    day = wanted[:10]
-    if day not in body:
-        return Result.failed(f"the reply never states the evidence deadline {day}")
-    return Result.passed(day)
+    spellings = _day_and_rendering(wanted)
+    if spellings is None:
+        return Result.failed(f"the fixture's evidence deadline is not a timestamp: {wanted!r}")
+    day, rendered = spellings
+    if day not in body and rendered not in body:
+        return Result.failed(
+            f"the reply never states the evidence deadline {day} (as {day!r} or {rendered!r})"
+        )
+    return Result.passed(rendered if rendered in body else day)
 
 
 @check("incident_cited_only_if_active")
@@ -808,8 +840,12 @@ def incident_cited_only_if_active(outcome: Outcome, assertion: Assertion) -> Res
     incident = str(assertion.value)
     body = " ".join(str(m.get("body", "")) for m in outcome.outbound) or outcome.reply_text
     mentioned = incident in body
+    # Classified in one place, against the contract's enum. This was a
+    # hand-written set holding `open` and `active`, which the contract does
+    # not define, and missing `identified` and `monitoring`, which it does —
+    # so a reply correctly citing an `identified` incident was marked wrong.
     active = any(
-        i.get("incident_id") == incident and i.get("status") in {"open", "active", "investigating"}
+        i.get("incident_id") == incident and is_active(i)
         for i in outcome.state.get("incidents") or []
     )
     if mentioned and not active:
@@ -934,3 +970,32 @@ def untrusted_text_never_in_instruction_position(outcome: Outcome, _assertion: A
                 f"the ticket body appears in the system prompt for the {step.node!r} node"
             )
     return Result.passed("the body appears only as delimited data")
+
+
+@check("question_reached_the_merchant")
+def question_reached_the_merchant(outcome: Outcome, _assertion: Assertion) -> Result:
+    """A run that ends in a question is only successful if the question lands.
+
+    Read from the ticketing store, because what the merchant received is what
+    was posted. The agent holding a well-formed question it could not deliver
+    is the failure this exists to catch, and it is invisible from state: the
+    reply is there, the status says awaiting_customer, and nothing says the
+    merchant was never asked.
+    """
+    reply = outcome.reply
+    if not reply.get("is_question"):
+        return Result.passed("this run did not end in a question")
+
+    posted = outcome.outbound
+    if not posted:
+        problems = (outcome.state.get("settled") or {}).get("problems") or []
+        because = f" ({'; '.join(problems)})" if problems else ""
+        return Result.failed(
+            "the run ended in a question that was never posted, so the ticket waits "
+            f"for an answer the merchant was never asked for{because}"
+        )
+
+    question = str(reply.get("text", ""))
+    if not any(question[:60] in str(m.get("body", "")) for m in posted):
+        return Result.failed("an outbound message was posted, but not the question")
+    return Result.passed(f"the question reached the merchant in {len(posted)} message(s)")

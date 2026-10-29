@@ -109,6 +109,78 @@ class TestTheTable:
         assert "what each model got wrong" in table
         assert "S01:bad_0" in table
 
+    def test_a_failing_run_reports_what_the_model_cited_and_wrote(self) -> None:
+        """The two fields that make a grounding verdict actionable.
+
+        `grounding=invalid_citation` says the model cited something that does
+        not exist, and is unactionable without the id it invented.
+        `grounding=partial` says the prose outran the citations, and is
+        unactionable without the prose. Both were absent, so three
+        consecutive diagnoses needed another GPU run to see what the model
+        had actually produced.
+        """
+        model = result("m", passed=0, failed=1, median=100)
+        model.runs[0].diagnostics = {
+            "intent": "settlement_query",
+            "path": ["triage", "draft"],
+            "grounding": "invalid_citation",
+            "draft_citations": ["kb:settlements:invented-id"],
+            "draft_excerpt": "Your payout is expected on 3 November.",
+            "grounding_problems": [
+                "cited passages that were not retrieved: kb:settlements:invented-id"
+            ],
+            "reply_excerpt": "I could not verify the policy, so a colleague will pick this up.",
+        }
+        table = render([model])
+
+        assert "kb:settlements:invented-id" in table
+        assert "3 November" in table
+        assert "problem: cited passages that were not retrieved" in table
+
+    def test_a_refused_draft_is_reported_instead_of_the_systems_own_refusal(self) -> None:
+        """The model's output and the system's substitute are different things.
+
+        Reporting only the reply made every refused run print `cited:
+        nothing`, because `verify_grounding` replaces the draft with a
+        refusal that cites nothing. That is indistinguishable from a model
+        that genuinely returned no citations — the two bugs we had been
+        chasing, collapsed into one line.
+        """
+        model = result("m", passed=0, failed=1, median=100)
+        model.runs[0].diagnostics = {
+            "grounding": "invalid_citation",
+            "draft_citations": ["kb:made-up"],
+            "draft_excerpt": "Your payout clears on Tuesday.",
+            "reply_excerpt": "A colleague will pick this up.",
+        }
+        table = render([model])
+
+        assert "cited: ['kb:made-up']" in table
+        assert "drafted: Your payout clears on Tuesday." in table
+        assert "sent instead: A colleague will pick this up." in table
+
+    def test_an_accepted_draft_is_not_printed_twice(self) -> None:
+        model = result("m", passed=0, failed=1, median=100)
+        model.runs[0].diagnostics = {
+            "grounding": "supported",
+            "draft_excerpt": "Your payout clears on Tuesday.",
+            "reply_excerpt": "Your payout clears on Tuesday.",
+        }
+        table = render([model])
+
+        assert table.count("Your payout clears on Tuesday.") == 1
+        assert "sent instead" not in table
+
+    def test_a_failing_run_with_no_reply_omits_the_line_rather_than_printing_empty(
+        self,
+    ) -> None:
+        model = result("m", passed=0, failed=1, median=100)
+        model.runs[0].diagnostics = {"grounding": "unsupported", "draft_citations": []}
+        table = render([model])
+
+        assert "cited: nothing" in table
+        assert "drafted:" not in table
+
     def test_the_table_says_what_to_read_first(self) -> None:
         # The sentence is the point of the whole exercise: a model that
         # skips an approval gate is not a cheaper option.
@@ -200,3 +272,61 @@ class TestTheBenchmarkPathUsesOnlyTheProtocol:
         # only place the protocol exposes it.
         failures = [(c.name, c.detail) for r in reports for c in r.failures]
         assert all(r.ok for r in reports), failures
+
+
+class TestTheDenominatorIsFixedInAdvance:
+    """A crash must score worse than a failed assertion, not better.
+
+    The first version counted the checks that ran, so a scenario that
+    errored contributed none — and a model whose run crashed scored 21/27
+    while one whose run merely failed an assertion scored 26/33. The crash
+    looked like the better result, in a table whose entire purpose is
+    comparison.
+    """
+
+    def test_an_errored_scenario_still_owes_its_assertions(self) -> None:
+        crashed = ModelResult(
+            model="crashes",
+            declared_checks=33,
+            runs=[RunReport("S03", "t", "main", checks=[], error="StructuredOutputError")],
+        )
+        assert crashed.checks == 33
+        assert crashed.passed_checks == 0
+        assert crashed.pass_rate == 0
+
+    def test_a_crash_ranks_below_a_failed_assertion(self) -> None:
+        crashed = ModelResult(
+            model="crashes",
+            declared_checks=10,
+            runs=[RunReport("S03", "t", "main", checks=[], error="boom")],
+        )
+        failed_one = ModelResult(
+            model="fails-one",
+            declared_checks=10,
+            runs=[
+                RunReport(
+                    "S03",
+                    "t",
+                    "main",
+                    checks=[CheckReport("a", True, "")] * 9 + [CheckReport("b", False, "d")],
+                )
+            ],
+        )
+        table = render([crashed, failed_one])
+        assert table.index("fails-one") < table.index("crashes")
+
+    def test_an_error_is_named_rather_than_hidden_in_the_denominator(self) -> None:
+        table = render(
+            [
+                ModelResult(
+                    model="m",
+                    declared_checks=6,
+                    runs=[
+                        RunReport("S03", "t", "main", checks=[], error="StructuredOutputError: x")
+                    ],
+                )
+            ]
+        )
+        assert "did not finish" in table
+        assert "S03" in table
+        assert "StructuredOutputError" in table

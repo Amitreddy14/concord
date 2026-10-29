@@ -107,9 +107,11 @@ infra/          Compose stack, migrations, local bootstrap
 
 ## Status
 
-Phase 8 complete except for the model-choice ADR, which is waiting on a benchmark run against
-the target hardware. Phase 9 next. See [docs/roadmap.md](docs/roadmap.md) for the full plan and
-the definition of done for each phase.
+Phases 0–8 complete. The model choice is recorded in
+[ADR 0010](docs/adr/0010-qwen3-is-the-default-and-the-gates-are-why-either-model-works.md):
+`qwen3:8b` by default, `llama3.1:8b` as the low-latency alternative, and the deterministic gates
+as a precondition for either. Phase 9 next. See [docs/roadmap.md](docs/roadmap.md) for the full
+plan and the definition of done for each phase.
 
 | Phase | Title | State |
 | --- | --- | --- |

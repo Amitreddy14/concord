@@ -77,14 +77,31 @@ class ModelResult:
     completion_tokens: int = 0
     vram_used_mib: int | None = None
     vram_total_mib: int | None = None
+    declared_checks: int = 0
+    """Assertions the chosen scenarios declare, set before the runs happen.
+
+    The denominator has to be fixed in advance, and the first version was
+    not: it counted the checks that *ran*, and a scenario that errored
+    contributed none. So a model whose run crashed outright scored 21/27
+    while one whose run merely failed an assertion scored 26/33 — and the
+    crash looked like the better result. The table's whole purpose is
+    comparison, and that made it compare different things.
+    """
 
     @property
     def checks(self) -> int:
-        return sum(len(r.checks) for r in self.runs)
+        # Declared, not observed. An errored scenario still owes its
+        # assertions.
+        return self.declared_checks or sum(len(r.checks) for r in self.runs)
 
     @property
     def passed_checks(self) -> int:
         return sum(1 for r in self.runs for c in r.checks if c.ok)
+
+    @property
+    def errored(self) -> list[str]:
+        """Scenarios that did not finish. Counted as failing every assertion."""
+        return sorted({f"{r.scenario_id} ({r.error})" for r in self.runs if r.error})
 
     @property
     def pass_rate(self) -> float:  # allow-float: a ratio, not an amount
@@ -124,6 +141,13 @@ class ModelResult:
             "vram_total_mib": self.vram_total_mib,
             "headroom_mib": self.headroom_mib,
             "failures": self.failures,
+            "errored": self.errored,
+            # The runs themselves, with every check's detail and the
+            # diagnostics that explain a cluster. Omitting these made the
+            # report unreadable without a GPU: the failure names were there
+            # and the reasons were not, so the only way to find out why was
+            # to run it again.
+            "runs": [r.to_payload() for r in self.runs],
         }
 
 
@@ -251,12 +275,62 @@ def render(results: list[ModelResult]) -> str:
             f"{result.prompt_tokens:>8} {result.completion_tokens:>7} {headroom:>9}"
         )
 
+    # Errors first, because a scenario that did not finish is a different
+    # and worse finding than one that finished and failed an assertion — and
+    # the old table hid it entirely behind a smaller denominator.
+    erroring = [r for r in results if r.available and r.errored]
+    if erroring:
+        lines.append("")
+        lines.append("  scenarios that did not finish (every assertion counted failed):")
+        for result in erroring:
+            for entry in result.errored:
+                lines.append(f"    {result.model}: {entry}")
+
     failing = [r for r in results if r.available and r.failures]
     if failing:
         lines.append("")
         lines.append("  what each model got wrong:")
         for result in failing:
             lines.append(f"    {result.model}: {', '.join(result.failures)}")
+
+        # And why, as far as the run's own shape can say. Four assertions
+        # failing in one scenario is usually one cause upstream of all four,
+        # and the intent and the path are where that shows. Printed here so
+        # the table can be acted on without re-running anything on a GPU.
+        lines.append("")
+        lines.append("  how the failing runs went:")
+        for result in failing:
+            for run in result.runs:
+                if not run.failures and not run.error:
+                    continue
+                d = run.diagnostics or {}
+                lines.append(
+                    f"    {result.model} {run.scenario_id}: "
+                    f"intent={d.get('intent')} "
+                    f"grounding={d.get('grounding')} "
+                    f"refusal={d.get('reply_is_refusal')} "
+                    f"outbound={d.get('outbound_messages')} "
+                    f"ticket={d.get('ticket_status')}/{d.get('ticket_assignee')}"
+                )
+                lines.append(f"      path: {' -> '.join(d.get('path') or [])}")
+                # What the model produced, which is the draft — not the
+                # reply, which on a refused run is the system's own text.
+                # `invalid_citation` is unactionable without the id the model
+                # invented, and `partial` without the claims it could not
+                # ground; `problems` already names both.
+                lines.append(f"      cited: {d.get('draft_citations') or 'nothing'}")
+                for problem in d.get("grounding_problems") or []:
+                    lines.append(f"      problem: {problem}")
+                for claim in d.get("draft_unsupported_claims") or []:
+                    lines.append(f"      could not ground: {claim}")
+                drafted = (d.get("draft_excerpt") or "").replace("\n", " ").strip()
+                if drafted:
+                    lines.append(f"      drafted: {drafted[:400]}")
+                # Only when they differ, which is exactly when the draft was
+                # refused and the merchant got something else.
+                sent = (d.get("reply_excerpt") or "").replace("\n", " ").strip()
+                if sent and sent != drafted:
+                    lines.append(f"      sent instead: {sent[:200]}")
 
     lines.append("")
     lines.append(

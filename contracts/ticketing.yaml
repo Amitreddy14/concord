@@ -174,6 +174,13 @@ paths:
         tenant requires grounded replies, and the service rejects an outbound
         agent message with an empty citation list when the tenant config
         demands citations.
+
+        The exception is a message that asserts nothing. `asserts_facts: false`
+        declares that the body makes no claim about the account or the policy
+        — a clarifying question — and the citation requirement does not apply
+        to it. The service cannot tell a question from an answer, so the
+        caller declares it; the field defaults to `true`, so a caller that
+        says nothing gets the stricter rule.
       tags: [messages]
       parameters:
         - name: ticketId
@@ -207,6 +214,14 @@ paths:
                   items:
                     type: string
                     description: Knowledge passage id.
+                asserts_facts:
+                  type: boolean
+                  default: true
+                  description: |
+                    Whether the body makes factual claims about the account or
+                    the tenant's policy. False only for a message that asserts
+                    nothing, such as a clarifying question, which has no
+                    passage behind it and needs none.
       responses:
         '201':
           description: Message appended.

@@ -144,6 +144,24 @@ class PostMessageArgs(ToolArgs):
     author: str = Field(min_length=1)
     body: str = Field(min_length=1, max_length=20000)
     citations: list[str] = Field(default_factory=list)
+    asserts_facts: bool = Field(
+        default=True,
+        description=(
+            "Whether this message makes factual claims about the merchant's "
+            "account or the tenant's policy. A tenant requiring grounded "
+            "replies requires citations only on messages that do. Defaults to "
+            "true, so a caller gets the stricter rule unless it says otherwise."
+        ),
+    )
+    """False only for a message that asserts nothing — a clarifying question.
+
+    Without this, a tenant requiring citations could not be asked a question.
+    A question about which of two payments the merchant meant has no passage
+    behind it and needs none, so the service rejected it, and the ticket was
+    then set to `awaiting_customer` while waiting for an answer to a question
+    the merchant never received. A permanent deadlock, and S11's entire
+    purpose is to terminate in a question.
+    """
 
 
 class AssignTicketArgs(ToolArgs):

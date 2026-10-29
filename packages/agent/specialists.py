@@ -29,8 +29,10 @@ from packages.agent.resolution import (
     resolve_payment,
 )
 from packages.agent.state import AgentState
+from packages.shared.dates import format_day
 from packages.shared.money import Money
 from packages.tools.errors import ToolError
+from packages.tools.incidents import is_active
 
 # Intent to specialist. Every intent the triage schema can produce appears
 # here, so a new intent cannot silently fall through to a default.
@@ -370,25 +372,37 @@ def specialist_facts(state: AgentState) -> str:
         if duplicates:
             lines.append(f"  duplicate captures (retry artifacts): {', '.join(duplicates)}")
 
+    # Dates are rendered here for the same reason amounts are: the drafter
+    # must copy a fact, not compute its presentation. Handed a raw
+    # `2026-10-17T10:00:00Z`, a model writes whatever reads well to it, and
+    # which day that is depends on a zone nobody chose.
     for settlement in state.get("settlements") or []:
         lines.append(
             f"settlement {settlement['settlement_id']}: {settlement['status']}, "
-            f"expected {settlement['expected_at']}, "
+            f"expected {format_day(settlement['expected_at'])}, "
             f"utr {settlement.get('utr') or 'not yet issued'}"
         )
 
+    # Labelled by its status, not labelled "active" and hoped for. The
+    # knowledge tool only returns active incidents, so this is defence in
+    # depth rather than a live bug — but a resolved incident reaching state
+    # and being announced to the drafter as active is how a reply comes to
+    # blame something that is over, and that is the most plausible-sounding
+    # falsehood this agent can tell.
     for incident in state.get("incidents") or []:
+        if not is_active(incident):
+            continue
         expected = incident.get("expected_resolution_at")
         lines.append(
             f"active incident {incident['incident_id']}: {incident['title']}; "
-            f"resolution date {expected or 'not committed'}"
+            f"resolution date {format_day(expected) if expected else 'not committed'}"
         )
 
     packet = state.get("evidence_packet") or {}
     for chargeback in packet.get("chargebacks") or []:
         lines.append(
             f"chargeback {chargeback['chargeback_id']}: {chargeback['reason_code']}, "
-            f"evidence due {chargeback['evidence_due_at']}"
+            f"evidence due {format_day(chargeback['evidence_due_at'])}"
         )
 
     if state.get("repeat_contact"):
