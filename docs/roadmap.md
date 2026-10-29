@@ -228,6 +228,28 @@ declared scope the expectation moved with it and the check passed. It now pins i
 and a merge gate that depended on hardware would break when the hardware is busy. The model-choice
 ADR is written from a run against the target card rather than from an assumption.
 
+The benchmark then spent five rounds measuring the prompt rather than the models. Pass rates moved
+from 5/10 to 9 and 10 out of 10, and not one of those movements came from a model — each was a
+defect in the drafting instruction or in the harness itself, two of the five being assertions that
+disagreed with the contracts they were checking. The signal that separated the two was the failure
+*signature*: two unrelated 8B models failing the same assertion the same way is evidence about the
+instruction, and models failing differently is evidence about the models. `ADR 0010` records the
+choice and is explicit about how little ten assertions can carry.
+
+One round made both models worse, which is the finding most worth keeping. A clarifying paragraph
+that correctly disambiguated `unsupported_claims` carried the vocabulary of dispute adjudication,
+and qwen3 answered a settlement ticket by adjudicating a defective product that does not exist in
+the scenario, inventing two record ids to cite. At this size an instruction is not a specification
+the model consults; it is context competing with the task. The instruction is now shorter than
+before the clarification.
+
+That near miss produced the one piece of hardening Phase 8 did not plan for. `ADR 0005` rule 3
+re-validates every identifier arriving *from* merchant text, in four places — and nothing
+re-validated the identifiers the model sends *out*. The invented records were caught only because
+they were also cited; named in prose and omitted from the citations array, they would have reached
+a merchant. `grounding.verify` now refuses a reply naming an identifier that appears in neither
+the facts nor the corpus.
+
 ---
 
 ## Phase 9 — Tenant onboarding and deployment
