@@ -144,10 +144,23 @@ ACTION_FOR_TOUCH = {
     "merchant_tier": "modify_merchant_tier",
 }
 
+# The rule ids this engine can return. `W1-reason-code-not-autonomous` and
+# `W2-multi-capture-requires-approval` used to sit between W0 and W3 and are
+# deliberately gone: they are vestiges of the design where the engine decided
+# approval itself, which is the defect Phase 6 fixed by making the tier table
+# the single authority. A refund held for a non-autonomous reason now returns
+# the tier that held it (`R2b-…`), not a parallel code for the same fact.
+#
+# Leaving them defined was an invitation to reintroduce two places deciding
+# the same thing — the failure that produced a tier reading `approval: none`
+# while the engine demanded one. `test_every_rule_id_is_reachable` keeps the
+# vocabulary honest from here.
+#
+# The W-prefixed codes that remain are the ones no reviewer can overrule,
+# because they describe the state of the world rather than the agent's
+# authority.
 RULE_FORBIDDEN = "F0-forbidden-action"
 RULE_OUTSIDE_WINDOW = "W0-outside-refund-window"
-RULE_REASON_NOT_AUTONOMOUS = "W1-reason-code-not-autonomous"
-RULE_MULTI_CAPTURE = "W2-multi-capture-requires-approval"
 RULE_EXCEEDS_REMAINDER = "W3-exceeds-unrefunded-remainder"
 RULE_NO_TIER_MATCHED = "T0-no-tier-matched"
 
