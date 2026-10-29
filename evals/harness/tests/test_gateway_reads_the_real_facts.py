@@ -76,7 +76,7 @@ def test_every_pattern_finds_something_in_a_populated_facts_block() -> None:
     """
     state = {
         **STATE,
-        "refund": {"refund_id": "rfnd_1", "amount": {"minor": 199900, "currency": "INR"}},
+        "refund": {"refund_id": "rfnd_1", "amount": {"amount_minor": 199900, "currency": "INR"}},
     }
     from packages.agent.nodes import draft_facts
 
