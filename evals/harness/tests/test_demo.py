@@ -9,35 +9,59 @@ describing is broken.
 
 from __future__ import annotations
 
+import contextlib
+import io
+from pathlib import Path
+
 import pytest
 
-from evals.harness.demo import DEMO_ORDER, QUESTIONS, _render_runs, main_async
+from evals.harness.demo import (
+    DEMO_ORDER,
+    QUESTIONS,
+    _as_markdown,
+    _render_runs,
+    main_async,
+)
 from evals.harness.run import CheckReport, RunReport
+
+TRANSCRIPT = Path(__file__).resolve().parents[3] / "docs" / "demo-transcript.md"
+
+
+#: One slot, written once. A dict rather than a module global because
+#: `packages/shared/telemetry` already set that precedent for the same reason
+#: — a rebound global is invisible at the call site.
+_CACHE: dict[str, str] = {}
+
+
+async def _walkthrough() -> str:
+    """The full walkthrough, run once per test session.
+
+    It drives S09's five retries and costs about twenty seconds, and
+    `make check` runs dozens of times a day. Two tests that each ran it took
+    the suite from 35 seconds to 72 for no additional coverage, so the output
+    is captured once and shared. Cached in a module global rather than a
+    pytest fixture because it has to be awaited, and a cache is clearer here
+    than an async session fixture.
+    """
+    if "output" not in _CACHE:
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            code = await main_async([])
+        assert code == 0, f"the walkthrough exited {code}:\n{buffer.getvalue()[-2000:]}"
+        _CACHE["output"] = buffer.getvalue()
+    return _CACHE["output"]
 
 
 @pytest.mark.asyncio
-async def test_the_full_walkthrough_narrates_what_the_runs_produced(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """One full run, asserted once.
+async def test_the_narration_is_read_from_the_runs() -> None:
+    """The four claims a reader would otherwise take on trust.
 
-    Deliberately a single test making every claim rather than three readable
-    ones. The full walkthrough includes S09's five repeats, each of which
-    drives a real retry, so it costs about thirty seconds — and `make check`
-    is run dozens of times a day. Two tests that each ran it doubled the
-    suite's wall time from 35 seconds to 72, which buys nothing: they would
-    fail together.
-
-    The facts asserted are the four claims the walkthrough makes that a
-    reader would otherwise take on trust: a refund was issued, a run paused
-    for a human, the injected ticket was priced against the tier the CRM
-    holds rather than the one the ticket asserts, and the five timing-out
-    runs produced one refund between them.
+    A refund was issued, a run paused for a human, the injected ticket was
+    priced against the tier the CRM holds rather than the one the ticket
+    asserts, and the five timing-out runs produced one refund between them.
     """
-    code = await main_async([])
-    out = capsys.readouterr().out
+    out = await _walkthrough()
 
-    assert code == 0
     for scenario_id in DEMO_ORDER:
         assert scenario_id in out, f"{scenario_id} is missing from the walkthrough"
 
@@ -48,6 +72,28 @@ async def test_the_full_walkthrough_narrates_what_the_runs_produced(
         "actually measured against"
     )
     assert "the number of refunds on the capture was [1]" in out
+
+
+@pytest.mark.asyncio
+async def test_the_committed_transcript_is_what_the_command_prints() -> None:
+    """The transcript is verified, not trusted.
+
+    A reviewer reads `docs/demo-transcript.md` instead of installing Python,
+    Ollama and Docker, so it is the most-read artefact in the repository and
+    the one with no natural pressure to stay correct. Committing output and
+    hoping is how a README comes to describe a system that no longer exists.
+
+    The demo is byte-deterministic — the stand-in is seeded, approval ids are
+    content hashes, and no timings are printed — so this can be an equality
+    check rather than a smoke test.
+    """
+    committed = TRANSCRIPT.read_text(encoding="utf-8")
+    expected = _as_markdown(await _walkthrough())
+
+    assert committed == expected, (
+        "docs/demo-transcript.md is not what `make demo` prints. Run "
+        "`make demo-transcript` and commit the result."
+    )
 
 
 def test_every_demo_scenario_has_a_question() -> None:
@@ -179,3 +225,53 @@ class TestCollapsingRepeatsHidesNothing:
             report.checks.append(CheckReport("bad", False, "detail"))
 
         assert _render_runs(reports) == 3
+
+
+class TestTheReadmeQuotesRealOutput:
+    """The README's excerpt must be output, not a description of output.
+
+    It is the most-read text in the repository and the least likely to be
+    re-checked: a reviewer who reads only the first screen gets their whole
+    impression from it. An excerpt that drifted — or that was tidied up to
+    read better — would be the one piece of this project making a claim
+    nothing verifies, in the place where a reader is least able to tell.
+
+    The first version of the excerpt was already wrong. It dropped the
+    `intent` and `path` lines while presenting as verbatim, which is an
+    abridgement nobody marked.
+    """
+
+    README = Path(__file__).resolve().parents[3] / "README.md"
+
+    @staticmethod
+    def _fenced_blocks(text: str) -> list[str]:
+        blocks: list[str] = []
+        parts = text.split("```text\n")
+        for part in parts[1:]:
+            blocks.append(part.split("```", 1)[0])
+        return blocks
+
+    def test_every_quoted_block_appears_in_the_transcript(self) -> None:
+        transcript = TRANSCRIPT.read_text(encoding="utf-8")
+        blocks = self._fenced_blocks(self.README.read_text(encoding="utf-8"))
+
+        assert blocks, "the README quotes no walkthrough output; the hook is gone"
+        for block in blocks:
+            body = block.rstrip("\n")
+            assert body in transcript, (
+                "a ```text block in the README is not a contiguous slice of "
+                "docs/demo-transcript.md:\n"
+                f"{body[:400]}"
+            )
+
+    def test_the_quoted_block_carries_the_point(self) -> None:
+        """Quoting real output is not enough if it is the wrong output.
+
+        The excerpt earns its place by showing the claim and its refutation
+        together: a ticket asserting enterprise tier, and a decision priced
+        against the standard-tier cap.
+        """
+        quoted = "\n".join(self._fenced_blocks(self.README.read_text(encoding="utf-8")))
+
+        assert "verified enterprise tier" in quoted
+        assert "standard-tier autonomy cap" in quoted
